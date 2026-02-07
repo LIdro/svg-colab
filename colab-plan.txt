@@ -1,0 +1,354 @@
+Objective
+Build a Colab-first demo version of svg-repair with a simplified flow:
+Upload image -> detect/segment objects -> process/inpaint -> trace -> assemble layered SVG -> preview/download.
+Reuse the existing backend logic where possible.
+Do not clean up repository files until the Colab version is complete and validated.
+
+Important implementation decision
+Use existing core pipeline code from svg-repair and VisionSoC.
+Do not port the full existing web app UI; create a new minimal Colab UI orchestration.
+
+What an LLM must read first before coding
+1) svg-repair/fastapi/segment_service.py
+Purpose: source of truth for detect, manual segment, inpaint, sequential inpaint, trace, trace-batch, assemble.
+2) svg-repair/fastapi/requirements.txt
+Purpose: required Python dependencies for the pipeline.
+3) svg-repair/app.js
+Focus areas:
+- detect flow around detectLabelBox
+- sequential inpaint orchestration around runSequentialInpainting
+- assembly logic around assembleTracedLayers and applyTraceOffset
+4) svg-repair/index.html
+Purpose: current UI capabilities and required final user outputs (code/download/details).
+5) VisionSoC/app.py
+Purpose: upscaler service behavior and payload shape.
+6) VisionSoC/colab_vision_soc_workbook.ipynb
+Purpose: proven Colab runtime/bootstrap pattern.
+
+Current known constraints in existing code to account for
+1) Frontend currently calls http://localhost:5600/segment-manual-box, but Node backend may not expose that route.
+For Colab implementation, call FastAPI service endpoint directly or expose matching proxy route in new Colab service.
+2) Existing segmentation stack uses SAM model files named sam2.1_b.pt and related.
+If requirement is SAM 3 specifically, integrate after baseline works; do not block initial pipeline.
+3) Existing inpaint supports OpenRouter and Big-LaMa/Qualcomm LaMa modes.
+OpenRouter needs API key; local LaMa modes need configured command/environment.
+
+Target Colab project structure to create
+colab_demo/
+colab_demo/notebook/
+colab_demo/notebook/svg_repair_colab_demo.ipynb
+colab_demo/services/
+colab_demo/services/api.py
+colab_demo/services/pipeline.py
+colab_demo/services/contracts.py
+colab_demo/services/config.py
+colab_demo/services/requirements-colab.txt
+colab_demo/ui/
+colab_demo/ui/gradio_app.py
+colab_demo/tests/
+colab_demo/tests/smoke_test.py
+colab_demo/tests/contracts_test.py
+colab_demo/assets/
+colab_demo/assets/samples/
+
+Endpoint contract to implement in Colab service
+Health
+GET /health
+Response: {"status":"ok"}
+
+Detect
+POST /detect
+Request:
+{
+  "image_data":"data:image/...;base64,...",
+  "text":"object description",
+  "method":"gdino|yolo26l|yolo26x",
+  "min_score":0.3,
+  "max_results":5,
+  "return_masks":true
+}
+Response:
+{
+  "boxes":[
+    {
+      "box":[x,y,width,height],
+      "score":0.0-1.0,
+      "mask_png":"data:image/png;base64,...",
+      "label":"string optional"
+    }
+  ]
+}
+
+Manual box segment
+POST /segment-manual-box
+Request:
+{
+  "image_data":"data:image/...;base64,...",
+  "box":[x1,y1,x2,y2],
+  "label":"string"
+}
+Response:
+{
+  "box":[x1,y1,x2,y2],
+  "label":"string",
+  "mask_png":"data:image/png;base64,...",
+  "width":number,
+  "height":number
+}
+
+Z-order
+POST /compute-z-order
+Request:
+{
+  "image_width":number,
+  "image_height":number,
+  "objects":[{"id":"str","label":"str","bbox":[x1,y1,x2,y2],"mask_data":"data:image/png;base64,..."}]
+}
+Response:
+{
+  "ordered_objects":[{"id":"str","label":"str","z_score":number,"rank":number,"reasoning":"str"}]
+}
+
+Sequential inpaint
+POST /inpaint-sequential
+Request:
+{
+  "image_data":"data:image/...;base64,...",
+  "objects":[{"id":"str","label":"str","bbox":[x1,y1,x2,y2],"mask_data":"data:image/png;base64,..."}],
+  "model":"optional string",
+  "provider":"openrouter|big-lama|qualcomm-lama-dilated",
+  "api_key":"optional string",
+  "use_z_order":true
+}
+Response:
+{
+  "success":true,
+  "layers":[{"object_id":"str","label":"str","rank":1,"inpainted_image":"data:image/png;base64,...","processing_time":0.0}],
+  "final_background":"data:image/png;base64,...",
+  "z_order_used":[...],
+  "total_processing_time":0.0
+}
+
+Trace batch
+POST /trace-batch
+Request:
+{
+  "layers":[
+    {
+      "id":"str",
+      "label":"str",
+      "image_data":"data:image/png;base64,...",
+      "source_image_data":"optional data uri",
+      "input_offset":{"x":0,"y":0,"width":0,"height":0},
+      "options":{...}
+    }
+  ],
+  "options":{...}
+}
+Response:
+{
+  "layers":[
+    {
+      "id":"str",
+      "label":"str",
+      "width":number,
+      "height":number,
+      "svg_paths":"<path...>",
+      "svg_full":"<svg...>",
+      "stats":{"path_count":number,"processing_time":number,"engine":"vtracer|potrace"},
+      "offset":{"x":0,"y":0,"width":0,"height":0}
+    }
+  ]
+}
+
+Assemble
+POST /assemble
+Request:
+{
+  "width":number,
+  "height":number,
+  "layers":[
+    {"id":"str","label":"str","svg_paths":"...","svg_full":"...","z_index":0,"hidden":false}
+  ],
+  "optimize":false
+}
+Response:
+{
+  "svgText":"<svg...>"
+}
+
+Implementation sequence with runnable checkpoints (Task-level Status Update)
+Step 1: Create Colab skeleton and bootstrap
+Actions:
+- ✅ Create colab_demo folder tree.
+- ✅ Add svg_repair_colab_demo.ipynb with setup cells.
+- ✅ Include GPU check cells (nvidia-smi, torch.cuda.is_available()).
+- ✅ Include pip install core dependencies cell.
+Checkpoint commands:
+- ⬜ Run notebook setup cells from clean Colab runtime.
+Pass criteria:
+- ⬜ No install errors.
+- ⬜ GPU check outputs true when GPU runtime selected.
+
+Step 2: Build minimal Colab API service from existing pipeline
+Actions:
+- ✅ Create colab_demo/services/api.py using FastAPI.
+- ✅ Reuse/copy required functions from svg-repair/fastapi/segment_service.py into colab_demo/services/pipeline.py.
+- ✅ Keep only required endpoints listed above.
+- ✅ Add colab_demo/services/config.py for env-based keys/weights.
+Checkpoint commands:
+- ⬜ Start API in notebook cell: uvicorn colab_demo.services.api:app --host 0.0.0.0 --port 5700
+- ⬜ curl /health
+Pass criteria:
+- ⬜ /health returns {"status":"ok"} from live Colab service.
+
+Step 3: Lock contracts and add smoke tests
+Actions:
+- ✅ Add colab_demo/tests/contracts_test.py covering endpoint response schema and required fields.
+- ✅ Add at least one sample image data fixture in colab_demo/assets/samples.
+Checkpoint commands:
+- ✅ Run pytest-like script (python runner) to check /health, /detect, /assemble minimal payload flow.
+Pass criteria:
+- ✅ Contract tests pass for required fields.
+
+Step 4: Build minimal Gradio UI shell
+Actions:
+- ✅ Create colab_demo/ui/gradio_app.py.
+- ✅ Add image upload component.
+- ✅ Add two image panels (left original, right result).
+- ✅ Add prompt textbox and detect button.
+- ✅ Add selected object table/list.
+- ✅ Add process button.
+- ✅ Add svg code output textbox and download button.
+- ✅ Keep advanced controls hidden initially (accordion).
+Checkpoint:
+- ⬜ Launch Gradio app from notebook and open public/local link.
+Pass criteria:
+- ⬜ UI loads and image upload renders on left panel in live Colab run.
+
+Step 5: Connect prompt detection flow
+Actions:
+- ⬜ Wire prompt submit (Enter and button) to /detect.
+- ✅ Wire prompt detect button to /detect.
+- ⬜ Overlay returned masks on left panel.
+- ✅ Overlay returned boxes on left panel.
+- ✅ Append detections to a persistent selected object list.
+Checkpoint:
+- ⬜ Use sample image; run two prompts for two different objects.
+Pass criteria:
+- ⬜ Both objects exist in selection state with mask previews and bbox metadata.
+
+Step 6: Add manual box fallback
+Actions:
+- ⬜ Add drawing interaction for manual rectangle in UI.
+- ✅ Collect label and call /segment-manual-box (via numeric x1/y1/x2/y2 fields).
+- ✅ Merge result into selected object list.
+Checkpoint:
+- ⬜ Manual draw on missed object.
+Pass criteria:
+- ⬜ New object appears with mask and coordinates from manual draw flow.
+
+Step 7: Add process pipeline action
+Actions:
+- ✅ Build object payload (id, label, bbox xyxy, mask_data).
+- ✅ Call /inpaint-sequential with use_z_order true.
+- ✅ Set right panel image to final_background.
+- ⬜ Retain step images for debug (optional accordion).
+Checkpoint:
+- ⬜ Run with 2+ objects.
+Pass criteria:
+- ⬜ final_background returned and displayed in validated runtime test.
+
+Step 8: Add VisionSoC upscaler branch
+Actions:
+- ✅ Add processing mode option: text-only upscaling.
+- ✅ Add processing mode option: upscale all extracted objects.
+- ✅ Route selected extracted object crops to VisionSoC service before tracing when mode requires.
+- ⬜ Confirm VisionSoC endpoint compatibility (current UI route must match live service route).
+- ⬜ Preserve offsets and dimensions for reintegration (verified with runtime test).
+Checkpoint:
+- ⬜ Test with text object + non-text object.
+Pass criteria:
+- ⬜ Upscaled object reintegrates at correct location and size metadata is preserved.
+
+Step 9: Add tracing and assembly
+Actions:
+- ✅ Create trace payload for background + extracted objects.
+- ✅ Call /trace-batch, then /assemble.
+- ✅ Apply offsets (transform) during assembly.
+- ⬜ Verify offsets so output layer positions match original coordinates.
+- ✅ Render assembled SVG in right panel.
+Checkpoint:
+- ⬜ End-to-end run on sample.
+Pass criteria:
+- ⬜ SVG output has multiple layers and correct overall dimensions (runtime-verified).
+
+Step 10: Add metadata, SVG code view, download
+Actions:
+- ✅ Compute and show metadata: total layers.
+- ✅ Compute and show metadata: total path count.
+- ✅ Show svg code in textbox.
+- ✅ Add download assembled.svg button.
+Checkpoint:
+- ⬜ Generate one final SVG in live UI session.
+Pass criteria:
+- ⬜ Metadata visible; code view populated; download works (runtime-verified).
+
+Step 11: Simplify flow and UX polish
+Actions:
+- ✅ Keep default path to 4 actions max: Upload -> Prompt detect/add -> Process -> Download.
+- ✅ Move secondary options to expandable advanced panel.
+- ⬜ Improve status/progress text at each phase.
+Checkpoint:
+- ⬜ Run by following only primary controls.
+Pass criteria:
+- ⬜ User can complete full flow without opening advanced panel (runtime-verified).
+
+Step 12: Validation matrix
+Actions:
+- ⬜ Run complete pipeline on text-heavy logo.
+- ⬜ Run complete pipeline on icon + text logo.
+- ⬜ Run complete pipeline on multi-object composition.
+- ⬜ Log timing and failures into colab_demo/tests/validation_log.txt.
+Checkpoint:
+- ⬜ All 3 test runs complete.
+Pass criteria:
+- ⬜ No hard crashes; known limitations recorded.
+
+Step 13: Cleanup only after full success
+Actions:
+- ⬜ Remove redundant files and outdated md files from repository.
+- ⬜ Keep only required docs: root README for Colab usage.
+- ⬜ Keep only required docs: minimal setup docs for api keys/models.
+- ⬜ Re-run one full end-to-end test after cleanup.
+Checkpoint:
+- ⬜ Fresh run still works.
+Pass criteria:
+- ⬜ Clean repo + functioning Colab flow.
+
+Operational rules for the implementing LLM
+1) Implement steps strictly in order.
+2) After each step, run the checkpoint before continuing.
+3) Do not perform destructive cleanup before Step 13.
+4) When uncertain, prefer reusing logic from:
+   - svg-repair/fastapi/segment_service.py
+   - svg-repair/app.js orchestration sections
+   - VisionSoC/app.py
+5) Keep all new code under colab_demo until final integration.
+6) Preserve compatibility with Google Colab GPU runtime constraints.
+
+Minimum environment variables for Colab run
+OPENROUTER_API_KEY=optional unless using OpenRouter inpainting
+SAM_WEIGHTS=path to sam weights file
+YOLO26L_WEIGHTS=path to yolo26l weights file
+YOLO26X_WEIGHTS=path to yolo26x weights file
+GDINO_CONFIG=path to grounding dino config
+GDINO_WEIGHTS=path to grounding dino weights
+
+Definition of done
+1) Colab notebook launches UI and supports upload.
+2) Prompt-based multi-object detect + manual box segment both work.
+3) Sequential inpainting completes and displays background result.
+4) Optional VisionSoC upscaling branch works and preserves offsets.
+5) Tracing + layered assembly produce downloadable SVG with metadata.
+6) Repo cleanup is completed only after full validation.
