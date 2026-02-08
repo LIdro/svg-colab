@@ -2,3 +2,12 @@ __pycache__/
 *.pyc
 .colab_models/
 .DS_Store
+*.py[cod]
+*$py.class
+.env
+.ipynb_checkpoints
+.vscode/
+data/
+outputs/
+temp/
+*.log
