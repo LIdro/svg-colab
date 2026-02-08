@@ -5,9 +5,8 @@ import io
 import json
 import os
 import tempfile
-import time
 import uuid
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 import gradio as gr
 import requests
@@ -28,6 +27,27 @@ def data_uri_to_pil(data_uri: str) -> Image.Image:
     return Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGBA")
 
 
+def _api_error_text(exc: requests.RequestException) -> str:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return str(exc)
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            detail = payload.get("detail")
+            if detail:
+                return str(detail)
+            error = payload.get("error")
+            if error:
+                return str(error)
+    except Exception:
+        pass
+    text = response.text.strip()
+    if text:
+        return f"HTTP {response.status_code}: {text[:300]}"
+    return f"HTTP {response.status_code}"
+
+
 def api_post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     r = requests.post(f"{API_BASE}{path}", json=payload, timeout=180)
     r.raise_for_status()
@@ -36,6 +56,20 @@ def api_post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def image_to_overlay(image: Image.Image, objects: List[Dict[str, Any]]) -> Image.Image:
     out = image.convert("RGBA").copy()
+    # Blend segmentation masks first so bounding boxes remain clearly visible on top.
+    for obj in objects:
+        mask_data = obj.get("mask_data")
+        if not mask_data:
+            continue
+        try:
+            mask_img = data_uri_to_pil(mask_data)
+            alpha = mask_img.getchannel("A")
+            tint = Image.new("RGBA", out.size, (255, 80, 80, 95))
+            out = Image.composite(tint, out, alpha)
+        except Exception:
+            # Keep rendering even if one mask is malformed.
+            continue
+
     draw = ImageDraw.Draw(out)
     for i, obj in enumerate(objects):
         bbox = obj.get("bbox_xyxy") or [0, 0, 0, 0]
@@ -68,17 +102,20 @@ def add_detected_objects(
         return image, selected_objects, objects_to_table(selected_objects), "Enter a prompt first."
 
     image_data = pil_to_data_uri(image)
-    result = api_post(
-        "/detect",
-        {
-            "image_data": image_data,
-            "text": prompt,
-            "method": method,
-            "min_score": min_score,
-            "max_results": int(max_results),
-            "return_masks": True,
-        },
-    )
+    try:
+        result = api_post(
+            "/detect",
+            {
+                "image_data": image_data,
+                "text": prompt,
+                "method": method,
+                "min_score": min_score,
+                "max_results": int(max_results),
+                "return_masks": True,
+            },
+        )
+    except requests.RequestException as exc:
+        return image, selected_objects, objects_to_table(selected_objects), f"Detect failed: {_api_error_text(exc)}"
 
     added = 0
     for box_item in result.get("boxes", []):
@@ -116,7 +153,10 @@ def add_manual_box(
         "box": [x1, y1, x2, y2],
         "label": label,
     }
-    result = api_post("/segment-manual-box", payload)
+    try:
+        result = api_post("/segment-manual-box", payload)
+    except requests.RequestException as exc:
+        return image, selected_objects, objects_to_table(selected_objects), f"Manual segment failed: {_api_error_text(exc)}"
 
     selected_objects.append(
         {
@@ -192,7 +232,10 @@ def process_objects(
         "use_z_order": use_z_order,
     }
 
-    result = api_post("/inpaint-sequential", payload)
+    try:
+        result = api_post("/inpaint-sequential", payload)
+    except requests.RequestException as exc:
+        return image, None, f"Process failed: {_api_error_text(exc)}", ""
     bg_data = result["final_background"]
     bg_image = data_uri_to_pil(bg_data)
     status = f"Processed {len(result.get('layers', []))} object(s) in {result.get('total_processing_time', 0):.2f}s"
@@ -234,7 +277,10 @@ def trace_and_assemble(
             }
         )
 
-    traced = api_post("/trace-batch", {"layers": layers, "options": {"color_mode": "color", "mode": "spline"}})
+    try:
+        traced = api_post("/trace-batch", {"layers": layers, "options": {"color_mode": "color", "mode": "spline"}})
+    except requests.RequestException as exc:
+        return "", "", None, f"Trace failed: {_api_error_text(exc)}"
 
     assembled_layers = []
     total_paths = 0
@@ -257,7 +303,10 @@ def trace_and_assemble(
         total_paths += int(layer.get("stats", {}).get("path_count", 0))
 
     w, h = image.size
-    assembled = api_post("/assemble", {"width": w, "height": h, "layers": assembled_layers, "optimize": False})
+    try:
+        assembled = api_post("/assemble", {"width": w, "height": h, "layers": assembled_layers, "optimize": False})
+    except requests.RequestException as exc:
+        return "", "", None, f"Assemble failed: {_api_error_text(exc)}"
     svg_text = assembled["svgText"]
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".svg") as f:
@@ -333,6 +382,11 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
     download_svg = gr.File(label="Download SVG")
 
     detect_button.click(
+        fn=add_detected_objects,
+        inputs=[input_image, prompt_text, detect_method, min_score, max_results, selected_objects_state],
+        outputs=[input_image, selected_objects_state, objects_table, status_text],
+    )
+    prompt_text.submit(
         fn=add_detected_objects,
         inputs=[input_image, prompt_text, detect_method, min_score, max_results, selected_objects_state],
         outputs=[input_image, selected_objects_state, objects_table, status_text],
