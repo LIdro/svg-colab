@@ -403,7 +403,7 @@ def trace_and_assemble(
 
 
 def clear_all():
-    return None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", None, None
+    return None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", "", None, "", None
 
 
 with gr.Blocks(title="SVG Repair Colab Demo") as demo:
@@ -414,7 +414,6 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
 
     with gr.Row():
         input_image = gr.Image(type="pil", label="Original")
-        result_image = gr.Image(type="pil", label="Result")
 
     status_text = gr.Textbox(label="Status", interactive=False)
 
@@ -463,10 +462,13 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
 
     with gr.Row():
         process_button = gr.Button("Process Objects")
-        trace_button = gr.Button("Trace + Assemble SVG")
         clear_button = gr.Button("Clear")
 
+    inpaint_preview_image = gr.Image(type="pil", label="Inpaint Preview (Processed Background)")
     z_order_box = gr.Code(label="Z-Order Used", language="json")
+
+    with gr.Row():
+        trace_button = gr.Button("Trace + Assemble SVG")
     svg_preview = gr.HTML(label="SVG Preview")
     svg_code = gr.Code(label="SVG Code", language="xml")
     metadata = gr.Textbox(label="Metadata", interactive=False)
@@ -510,7 +512,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
     process_button.click(
         fn=process_objects,
         inputs=[input_image, selected_objects_state, provider, model, api_key, use_z_order],
-        outputs=[result_image, processed_background_state, status_text, z_order_box],
+        outputs=[inpaint_preview_image, processed_background_state, status_text, z_order_box],
     )
 
     trace_button.click(
@@ -521,7 +523,20 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
 
     clear_button.click(
         fn=clear_all,
-        outputs=[input_image, result_image, selected_objects_state, objects_table, object_selector, status_text, z_order_box, svg_code, download_svg],
+        outputs=[
+            input_image,
+            inpaint_preview_image,
+            selected_objects_state,
+            objects_table,
+            object_selector,
+            status_text,
+            z_order_box,
+            svg_preview,
+            svg_code,
+            download_svg,
+            metadata,
+            processed_background_state,
+        ],
     )
 
 
