@@ -200,8 +200,16 @@ class ColabPipeline:
         width, height = image.size
         image_rgba, image_rgb = self._prepare_image_arrays(image)
 
-        if payload.method == "gdino" and self.gdino_model is not None and self.gdino_predict is not None and self.gdino_load_image is not None:
-            return self._detect_with_gdino(payload, image, image_rgba, image_rgb)
+        if payload.method == "gdino":
+            if self.gdino_model is not None and self.gdino_predict is not None and self.gdino_load_image is not None:
+                return self._detect_with_gdino(payload, image, image_rgba, image_rgb)
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "GDINO was explicitly requested but GroundingDINO is not loaded. "
+                    "Set GDINO_CONFIG and GDINO_WEIGHTS to valid files, then restart the API."
+                ),
+            )
         if payload.method in ("yolo26l", "yolo26x"):
             return self._detect_with_yolo(payload, image_rgba, image_rgb, width, height)
 
@@ -631,7 +639,7 @@ class ColabPipeline:
             loop_start = time.time()
             prompt = ""
             if (payload.provider or InpaintProvider.big_lama.value) == InpaintProvider.openrouter.value:
-                prompt = f"Inpaint and remove the {z.label} from this image. Blend surrounding texture naturally."
+                prompt = self._build_openrouter_inpaint_prompt(label=z.label)
 
             mask_data = obj.mask_data
             if any(k in z.label.lower() for k in ["text", "logo", "watermark", "caption", "title", "label"]):

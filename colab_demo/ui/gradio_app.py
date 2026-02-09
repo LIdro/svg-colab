@@ -28,9 +28,16 @@ def data_uri_to_pil(data_uri: str) -> Image.Image:
 
 
 def _api_error_text(exc: requests.RequestException) -> str:
+    msg = str(exc)
+    if isinstance(exc, requests.ConnectionError) or "Connection refused" in msg or "Failed to establish a new connection" in msg:
+        return (
+            f"API unreachable at {API_BASE}. Start the API first: "
+            "python -m uvicorn colab_demo.services.api:app --host 0.0.0.0 --port 5700"
+        )
+
     response = getattr(exc, "response", None)
     if response is None:
-        return str(exc)
+        return msg
     try:
         payload = response.json()
         if isinstance(payload, dict):
@@ -396,7 +403,7 @@ def trace_and_assemble(
 
 
 def clear_all():
-    return None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", None
+    return None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", None, None
 
 
 with gr.Blocks(title="SVG Repair Colab Demo") as demo:
