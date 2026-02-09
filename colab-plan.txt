@@ -215,7 +215,7 @@ Step 4: Build minimal Gradio UI shell
 Actions:
 - ✅ Create colab_demo/ui/gradio_app.py.
 - ✅ Add image upload component.
-- ✅ Add two image panels (left original, right result).
+- ✅ Keep original image as the primary top panel and show processed inpaint preview in the process section.
 - ✅ Add prompt textbox and detect button.
 - ✅ Add selected object table/list.
 - ✅ Add process button.
@@ -228,9 +228,9 @@ Pass criteria:
 
 Step 5: Connect prompt detection flow
 Actions:
-- ⬜ Wire prompt submit (Enter and button) to /detect.
+- ✅ Wire prompt submit (Enter and button) to /detect.
 - ✅ Wire prompt detect button to /detect.
-- ⬜ Overlay returned masks on left panel.
+- ✅ Overlay returned masks on left panel.
 - ✅ Overlay returned boxes on left panel.
 - ✅ Append detections to a persistent selected object list.
 Checkpoint:
@@ -298,7 +298,7 @@ Step 11: Simplify flow and UX polish
 Actions:
 - ✅ Keep default path to 4 actions max: Upload -> Prompt detect/add -> Process -> Download.
 - ✅ Move secondary options to expandable advanced panel.
-- ⬜ Improve status/progress text at each phase.
+- ✅ Improve status/progress text at each phase.
 Checkpoint:
 - ⬜ Run by following only primary controls.
 Pass criteria:
@@ -352,3 +352,14 @@ Definition of done
 4) Optional VisionSoC upscaling branch works and preserves offsets.
 5) Tracing + layered assembly produce downloadable SVG with metadata.
 6) Repo cleanup is completed only after full validation.
+
+Hotfix batch: inpaint + UI + API reliability
+Actions:
+- ✅ OpenRouter inpaint prompt now enforces mask-only edits, preserves unmasked pixels/composition, and fills hole seamlessly.
+- ✅ Processed inpaint preview moved to dedicated process section; original image remains the primary top image panel.
+- ✅ UI now returns actionable API-down message when connection is refused, including startup command and API base.
+- ✅ Explicit `method=gdino` now returns a clear API error when GDINO is unavailable (no full-image fallback in explicit GDINO mode).
+Checkpoint:
+- ⬜ Validate hotfixes in a live Colab run (detect masks, process text object, trace/assemble, object manager regression).
+Pass criteria:
+- ⬜ No full-image fallback for explicit GDINO; inpaint behavior preserves unmasked areas in runtime output.
