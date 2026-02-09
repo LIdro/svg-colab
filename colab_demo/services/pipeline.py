@@ -508,6 +508,23 @@ class ColabPipeline:
             out = open(output_path, "rb").read()
         return "data:image/png;base64," + base64.b64encode(out).decode("ascii")
 
+    def _build_openrouter_inpaint_prompt(self, label: str, prompt: str = "") -> str:
+        user_prompt = (prompt or "").strip()
+        if not user_prompt:
+            user_prompt = (
+                f"Inpaint and remove the {label} from this image. "
+                "Fill the masked area seamlessly with surrounding background colors and texture."
+            )
+        required = (
+            "The first image is the source image. "
+            "The second image is the inpaint mask where white pixels are the ONLY region allowed to change. "
+            "Do not modify any unmasked pixel. "
+            "Do not delete, move, warp, transform, or restyle any unmasked object. "
+            "Preserve the original composition, lighting, color palette, and detail everywhere outside the mask. "
+            "Only remove content inside the masked area and fill that hole naturally so it blends with nearby pixels."
+        )
+        return f"{user_prompt} {required}"
+
     def _inpaint(self, image_data: str, mask_data: str, provider: Optional[str], model: Optional[str], api_key: Optional[str], prompt: str = "") -> Dict[str, Any]:
         provider_name, model_name = self._normalize_inpaint_provider(provider, model)
         if provider_name == "openrouter":
@@ -528,7 +545,7 @@ class ColabPipeline:
                 "X-Title": "svg-repair-colab-demo",
             }
             mask_uri = "data:image/png;base64," + base64.b64encode(mask_bytes).decode("ascii")
-            full_prompt = prompt or "Remove the masked object and fill naturally."
+            full_prompt = self._build_openrouter_inpaint_prompt(label="masked object", prompt=prompt)
             payload = {
                 "model": model_name,
                 "modalities": ["image"],
