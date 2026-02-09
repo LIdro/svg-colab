@@ -88,6 +88,26 @@ def objects_to_table(objects: List[Dict[str, Any]]) -> List[List[Any]]:
     return rows
 
 
+def object_choices(objects: List[Dict[str, Any]]) -> List[str]:
+    return [f"{obj['id']} | {obj.get('label', '')}" for obj in objects]
+
+
+def object_id_from_choice(choice: str) -> str:
+    if not choice:
+        return ""
+    return choice.split(" | ", 1)[0].strip()
+
+
+def manager_dropdown_update(objects: List[Dict[str, Any]], preferred: str | None = None):
+    choices = object_choices(objects)
+    value = None
+    if preferred and preferred in choices:
+        value = preferred
+    elif choices:
+        value = choices[0]
+    return gr.update(choices=choices, value=value)
+
+
 def add_detected_objects(
     image: Image.Image,
     prompt: str,
@@ -97,9 +117,9 @@ def add_detected_objects(
     selected_objects: List[Dict[str, Any]],
 ):
     if image is None:
-        return None, selected_objects, objects_to_table(selected_objects), "Upload an image first."
+        return None, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects), "Upload an image first."
     if not prompt.strip():
-        return image, selected_objects, objects_to_table(selected_objects), "Enter a prompt first."
+        return image, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects), "Enter a prompt first."
 
     image_data = pil_to_data_uri(image)
     try:
@@ -115,7 +135,7 @@ def add_detected_objects(
             },
         )
     except requests.RequestException as exc:
-        return image, selected_objects, objects_to_table(selected_objects), f"Detect failed: {_api_error_text(exc)}"
+        return image, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects), f"Detect failed: {_api_error_text(exc)}"
 
     added = 0
     for box_item in result.get("boxes", []):
@@ -131,7 +151,7 @@ def add_detected_objects(
         added += 1
 
     overlay = image_to_overlay(image, selected_objects)
-    return overlay, selected_objects, objects_to_table(selected_objects), f"Added {added} object(s)."
+    return overlay, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects), f"Added {added} object(s)."
 
 
 def add_manual_box(
@@ -144,9 +164,9 @@ def add_manual_box(
     selected_objects: List[Dict[str, Any]],
 ):
     if image is None:
-        return None, selected_objects, objects_to_table(selected_objects), "Upload an image first."
+        return None, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects), "Upload an image first."
     if not label.strip():
-        return image, selected_objects, objects_to_table(selected_objects), "Enter label for manual box."
+        return image, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects), "Enter label for manual box."
 
     payload = {
         "image_data": pil_to_data_uri(image),
@@ -156,7 +176,7 @@ def add_manual_box(
     try:
         result = api_post("/segment-manual-box", payload)
     except requests.RequestException as exc:
-        return image, selected_objects, objects_to_table(selected_objects), f"Manual segment failed: {_api_error_text(exc)}"
+        return image, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects), f"Manual segment failed: {_api_error_text(exc)}"
 
     selected_objects.append(
         {
@@ -167,7 +187,64 @@ def add_manual_box(
         }
     )
     overlay = image_to_overlay(image, selected_objects)
-    return overlay, selected_objects, objects_to_table(selected_objects), "Manual segment added."
+    return overlay, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects), "Manual segment added."
+
+
+def remove_selected_object(
+    image: Image.Image,
+    selected_objects: List[Dict[str, Any]],
+    object_choice: str,
+):
+    if image is None:
+        return None, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects), "Upload an image first."
+    if not selected_objects:
+        return image, selected_objects, [], manager_dropdown_update(selected_objects), "No selected objects."
+    object_id = object_id_from_choice(object_choice)
+    if not object_id:
+        return image, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects), "Select an object to remove."
+
+    before = len(selected_objects)
+    selected_objects = [obj for obj in selected_objects if obj.get("id") != object_id]
+    removed = before - len(selected_objects)
+    overlay = image_to_overlay(image, selected_objects)
+    message = "Object removed." if removed else "Object not found."
+    return overlay, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects), message
+
+
+def relabel_selected_object(
+    image: Image.Image,
+    selected_objects: List[Dict[str, Any]],
+    object_choice: str,
+    new_label: str,
+):
+    if image is None:
+        return None, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects), "Upload an image first."
+    if not selected_objects:
+        return image, selected_objects, [], manager_dropdown_update(selected_objects), "No selected objects."
+    if not new_label.strip():
+        return image, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects), "Enter a new label."
+
+    object_id = object_id_from_choice(object_choice)
+    if not object_id:
+        return image, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects), "Select an object to relabel."
+
+    updated = False
+    for obj in selected_objects:
+        if obj.get("id") == object_id:
+            obj["label"] = new_label.strip()
+            updated = True
+            break
+
+    overlay = image_to_overlay(image, selected_objects)
+    preferred = f"{object_id} | {new_label.strip()}" if updated else object_choice
+    message = "Object relabeled." if updated else "Object not found."
+    return overlay, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects, preferred), message
+
+
+def clear_selected_objects(image: Image.Image):
+    if image is None:
+        return None, [], [], manager_dropdown_update([]), "Cleared selected objects."
+    return image, [], [], manager_dropdown_update([]), "Cleared selected objects."
 
 
 def _should_upscale(label: str, upscale_mode: str) -> bool:
@@ -319,7 +396,7 @@ def trace_and_assemble(
 
 
 def clear_all():
-    return None, None, [], [], "Cleared.", "", "", None
+    return None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", None
 
 
 with gr.Blocks(title="SVG Repair Colab Demo") as demo:
@@ -369,6 +446,13 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
             upscale_quality = gr.Dropdown(["fast", "balanced", "quality"], value="balanced", label="Upscale quality")
 
     objects_table = gr.Dataframe(headers=["id", "label", "x1", "y1", "x2", "y2"], label="Selected Objects", interactive=False)
+    with gr.Accordion("Manage Selected Objects", open=False):
+        object_selector = gr.Dropdown(choices=[], label="Selected Object", interactive=True)
+        relabel_text = gr.Textbox(label="New Label", placeholder="e.g. logo text")
+        with gr.Row():
+            remove_object_button = gr.Button("Remove Object")
+            relabel_object_button = gr.Button("Relabel Object")
+            clear_selected_button = gr.Button("Clear Selected Objects")
 
     with gr.Row():
         process_button = gr.Button("Process Objects")
@@ -384,18 +468,36 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
     detect_button.click(
         fn=add_detected_objects,
         inputs=[input_image, prompt_text, detect_method, min_score, max_results, selected_objects_state],
-        outputs=[input_image, selected_objects_state, objects_table, status_text],
+        outputs=[input_image, selected_objects_state, objects_table, object_selector, status_text],
     )
     prompt_text.submit(
         fn=add_detected_objects,
         inputs=[input_image, prompt_text, detect_method, min_score, max_results, selected_objects_state],
-        outputs=[input_image, selected_objects_state, objects_table, status_text],
+        outputs=[input_image, selected_objects_state, objects_table, object_selector, status_text],
     )
 
     add_manual_btn.click(
         fn=add_manual_box,
         inputs=[input_image, mx1, my1, mx2, my2, mlabel, selected_objects_state],
-        outputs=[input_image, selected_objects_state, objects_table, status_text],
+        outputs=[input_image, selected_objects_state, objects_table, object_selector, status_text],
+    )
+
+    remove_object_button.click(
+        fn=remove_selected_object,
+        inputs=[input_image, selected_objects_state, object_selector],
+        outputs=[input_image, selected_objects_state, objects_table, object_selector, status_text],
+    )
+
+    relabel_object_button.click(
+        fn=relabel_selected_object,
+        inputs=[input_image, selected_objects_state, object_selector, relabel_text],
+        outputs=[input_image, selected_objects_state, objects_table, object_selector, status_text],
+    )
+
+    clear_selected_button.click(
+        fn=clear_selected_objects,
+        inputs=[input_image],
+        outputs=[input_image, selected_objects_state, objects_table, object_selector, status_text],
     )
 
     process_button.click(
@@ -412,7 +514,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
 
     clear_button.click(
         fn=clear_all,
-        outputs=[input_image, result_image, selected_objects_state, objects_table, status_text, z_order_box, svg_code, download_svg],
+        outputs=[input_image, result_image, selected_objects_state, objects_table, object_selector, status_text, z_order_box, svg_code, download_svg],
     )
 
 
