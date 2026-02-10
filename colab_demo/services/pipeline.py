@@ -605,23 +605,6 @@ class ColabPipeline:
             out = open(output_path, "rb").read()
         return "data:image/png;base64," + base64.b64encode(out).decode("ascii")
 
-    def _build_openrouter_inpaint_prompt(self, label: str, prompt: str = "") -> str:
-        user_prompt = (prompt or "").strip()
-        if not user_prompt:
-            user_prompt = (
-                f"Inpaint and remove the {label} from this image. "
-                "Fill the masked area seamlessly with surrounding background colors and texture."
-            )
-        required = (
-            "The first image is the source image. "
-            "The second image is the inpaint mask where white pixels are the ONLY region allowed to change. "
-            "Do not modify any unmasked pixel. "
-            "Do not delete, move, warp, transform, or restyle any unmasked object. "
-            "Preserve the original composition, lighting, color palette, and detail everywhere outside the mask. "
-            "Only remove content inside the masked area and fill that hole naturally so it blends with nearby pixels."
-        )
-        return f"{user_prompt} {required}"
-
     def _inpaint(self, image_data: str, mask_data: str, provider: Optional[str], model: Optional[str], api_key: Optional[str], prompt: str = "") -> Dict[str, Any]:
         provider_name, model_name = self._normalize_inpaint_provider(provider, model)
         if provider_name == "openrouter":
@@ -642,7 +625,9 @@ class ColabPipeline:
                 "X-Title": "svg-repair-colab-demo",
             }
             mask_uri = "data:image/png;base64," + base64.b64encode(mask_bytes).decode("ascii")
-            full_prompt = self._build_openrouter_inpaint_prompt(label="masked object", prompt=prompt)
+            full_prompt = (prompt or "Remove the masked object and fill naturally.").strip()
+            if "mask" not in full_prompt.lower():
+                full_prompt += " The second image is the mask where white pixels indicate the area to be inpainted/filled."
             payload = {
                 "model": model_name,
                 "modalities": ["image"],
@@ -728,7 +713,11 @@ class ColabPipeline:
             loop_start = time.time()
             prompt = ""
             if (payload.provider or InpaintProvider.big_lama.value) == InpaintProvider.openrouter.value:
-                prompt = self._build_openrouter_inpaint_prompt(label=z.label)
+                prompt = (
+                    f"Inpaint and remove the {z.label} from this image. "
+                    "Fill the masked area seamlessly with the surrounding background texture and colors. "
+                    "Maintain the exact same style and quality of the rest of the image."
+                )
 
             mask_data = obj.mask_data
             if any(k in z.label.lower() for k in ["text", "logo", "watermark", "caption", "title", "label"]):
