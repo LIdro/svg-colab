@@ -9,11 +9,17 @@ import uuid
 from typing import Any, Dict, List
 
 import gradio as gr
+import numpy as np
 import requests
 from PIL import Image, ImageDraw
 
 API_BASE = os.getenv("COLAB_API_BASE", "http://127.0.0.1:5700")
 VISION_SOC_URL = os.getenv("VISION_SOC_URL", "http://127.0.0.1:5050")
+
+try:
+    import cv2
+except Exception:
+    cv2 = None
 
 
 def pil_to_data_uri(image: Image.Image) -> str:
@@ -263,6 +269,82 @@ def _should_upscale(label: str, upscale_mode: str) -> bool:
     return any(k in label.lower() for k in text_keywords)
 
 
+def _is_text_like_label(label: str) -> bool:
+    lower = (label or "").lower()
+    return any(k in lower for k in ["text", "logo", "word", "letter", "title", "caption", "label", "watermark"])
+
+
+def _split_text_object_layers(
+    obj: Dict[str, Any],
+    image_size: tuple[int, int],
+    min_component_area: int = 12,
+) -> List[Dict[str, Any]]:
+    if not obj.get("mask_data") or not _is_text_like_label(obj.get("label", "")) or cv2 is None:
+        return [obj]
+
+    width, height = image_size
+    try:
+        mask_img = data_uri_to_pil(obj["mask_data"])
+    except Exception:
+        return [obj]
+    if mask_img.size != (width, height):
+        mask_img = mask_img.resize((width, height), Image.Resampling.LANCZOS)
+
+    alpha = np.array(mask_img.getchannel("A"), dtype=np.uint8)
+    binary = (alpha > 0).astype(np.uint8)
+    if binary.max() == 0:
+        return [obj]
+
+    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    if n_labels <= 2:
+        return [obj]
+
+    components = []
+    for idx in range(1, n_labels):
+        area = int(stats[idx, cv2.CC_STAT_AREA])
+        if area < min_component_area:
+            continue
+
+        left = int(stats[idx, cv2.CC_STAT_LEFT])
+        top = int(stats[idx, cv2.CC_STAT_TOP])
+        comp_w = int(stats[idx, cv2.CC_STAT_WIDTH])
+        comp_h = int(stats[idx, cv2.CC_STAT_HEIGHT])
+
+        component = np.zeros((height, width), dtype=np.uint8)
+        component[labels == idx] = 255
+        rgba = np.zeros((height, width, 4), dtype=np.uint8)
+        rgba[:, :, 3] = component
+        comp_mask = pil_to_data_uri(Image.fromarray(rgba, mode="RGBA"))
+
+        components.append(
+            {
+                "id": f"{obj['id']}-c{len(components) + 1}",
+                "label": f"{obj.get('label', 'text')}_{len(components) + 1}",
+                "bbox_xyxy": [left, top, left + comp_w, top + comp_h],
+                "mask_data": comp_mask,
+            }
+        )
+
+    if not components:
+        return [obj]
+
+    components.sort(key=lambda item: item["bbox_xyxy"][0])
+    return components
+
+
+def _expand_objects_for_trace(
+    selected_objects: List[Dict[str, Any]],
+    image_size: tuple[int, int],
+    split_text_layers: bool,
+) -> List[Dict[str, Any]]:
+    if not split_text_layers:
+        return selected_objects
+    expanded: List[Dict[str, Any]] = []
+    for obj in selected_objects:
+        expanded.extend(_split_text_object_layers(obj, image_size))
+    return expanded
+
+
 def _upscale_data_uri(image_data: str, mode: str) -> str:
     try:
         b64 = image_data.split(",", 1)[1] if "," in image_data else image_data
@@ -332,6 +414,7 @@ def trace_and_assemble(
     selected_objects: List[Dict[str, Any]],
     upscale_mode: str,
     upscale_quality: str,
+    split_text_layers: bool,
 ):
     if image is None:
         return "", "", None, "Upload an image first."
@@ -347,7 +430,9 @@ def trace_and_assemble(
         }
     ]
 
-    for obj in selected_objects:
+    trace_objects = _expand_objects_for_trace(selected_objects, image.size, split_text_layers)
+
+    for obj in trace_objects:
         layer_image_data = obj["mask_data"]
         if _should_upscale(obj["label"], upscale_mode):
             layer_image_data = _upscale_data_uri(layer_image_data, upscale_quality)
@@ -450,6 +535,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
                 label="Upscale mode",
             )
             upscale_quality = gr.Dropdown(["fast", "balanced", "quality"], value="balanced", label="Upscale quality")
+            split_text_layers = gr.Checkbox(value=False, label="Split text objects into separate sublayers")
 
     objects_table = gr.Dataframe(headers=["id", "label", "x1", "y1", "x2", "y2"], label="Selected Objects", interactive=False)
     with gr.Accordion("Manage Selected Objects", open=False):
@@ -517,7 +603,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
 
     trace_button.click(
         fn=trace_and_assemble,
-        inputs=[input_image, processed_background_state, selected_objects_state, upscale_mode, upscale_quality],
+        inputs=[input_image, processed_background_state, selected_objects_state, upscale_mode, upscale_quality, split_text_layers],
         outputs=[svg_preview, svg_code, download_svg, metadata],
     )
 
