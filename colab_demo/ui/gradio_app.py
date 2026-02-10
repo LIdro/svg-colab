@@ -561,6 +561,12 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
     metadata = gr.Textbox(label="Metadata", interactive=False)
     download_svg = gr.File(label="Download SVG")
 
+    input_image.change(
+        fn=lambda img: img.convert("RGBA") if img is not None else None,
+        inputs=[input_image],
+        outputs=[detect_preview_image],
+    )
+
     detect_button.click(
         fn=add_detected_objects,
         inputs=[input_image, prompt_text, detect_method, min_score, max_results, selected_objects_state],
