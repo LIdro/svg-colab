@@ -129,6 +129,72 @@ class ColabPipeline:
             return None
         return None
 
+    def _is_text_like_label(self, label: str) -> bool:
+        lower = (label or "").lower()
+        return any(k in lower for k in ["text", "logo", "word", "letter", "title", "caption", "label", "watermark"])
+
+    def _contrast_mask_from_box(
+        self,
+        box_xyxy: List[float],
+        image_rgb: np.ndarray,
+        image_rgba: np.ndarray,
+    ) -> Optional[str]:
+        h, w = image_rgb.shape[:2]
+        x1, y1, x2, y2 = [int(round(v)) for v in box_xyxy]
+        x1 = max(0, min(w - 1, x1))
+        x2 = max(0, min(w, x2))
+        y1 = max(0, min(h - 1, y1))
+        y2 = max(0, min(h, y2))
+        if x2 <= x1 or y2 <= y1:
+            return None
+
+        region_rgb = image_rgb[y1:y2, x1:x2].astype(np.float32)
+        region_alpha = image_rgba[y1:y2, x1:x2, 3]
+        if region_rgb.size == 0:
+            return None
+
+        border_pixels = np.concatenate(
+            [
+                region_rgb[0, :, :],
+                region_rgb[-1, :, :],
+                region_rgb[:, 0, :],
+                region_rgb[:, -1, :],
+            ],
+            axis=0,
+        )
+        if border_pixels.size == 0:
+            return None
+
+        bg_color = np.median(border_pixels, axis=0)
+        color_dist = np.linalg.norm(region_rgb - bg_color, axis=2)
+        q70 = float(np.percentile(color_dist, 70))
+        q85 = float(np.percentile(color_dist, 85))
+        threshold = max(18.0, min(64.0, (q70 + q85) / 2.0))
+        fg = (color_dist >= threshold) & (region_alpha > 0)
+
+        if cv2 is not None and fg.any():
+            fg_u8 = (fg.astype(np.uint8) * 255)
+            kernel = np.ones((3, 3), np.uint8)
+            fg_u8 = cv2.morphologyEx(fg_u8, cv2.MORPH_OPEN, kernel, iterations=1)
+            fg_u8 = cv2.morphologyEx(fg_u8, cv2.MORPH_CLOSE, kernel, iterations=1)
+            n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(fg_u8, connectivity=8)
+            if n_labels > 1:
+                min_area = max(8, int((x2 - x1) * (y2 - y1) * 0.001))
+                filtered = np.zeros_like(fg_u8)
+                for idx in range(1, n_labels):
+                    area = int(stats[idx, cv2.CC_STAT_AREA])
+                    if area >= min_area:
+                        filtered[labels == idx] = 255
+                fg_u8 = filtered
+            fg = fg_u8 > 0
+
+        if not fg.any():
+            return None
+
+        mask = np.zeros((h, w), dtype=np.uint8)
+        mask[y1:y2, x1:x2] = fg.astype(np.uint8) * 255
+        return self._mask_to_png(mask, image_rgba)
+
     def _load_models_if_needed(self) -> None:
         if self._loaded:
             return
@@ -263,11 +329,19 @@ class ColabPipeline:
         indexed = indexed[: payload.max_results]
 
         out = []
+        text_like = self._is_text_like_label(payload.text)
         for box, score in indexed:
             box_xyxy = [float(v) for v in box]
-            mask_png = self._generate_sam_mask(box_xyxy, image_rgb, image_rgba) if payload.return_masks else None
-            if payload.return_masks and mask_png is None:
-                mask_png = self._mask_to_png(self._box_mask(box_xyxy, width, height), image_rgba)
+            mask_png = None
+            if payload.return_masks:
+                mask_png = self._generate_sam_mask(box_xyxy, image_rgb, image_rgba)
+                refined_mask = self._contrast_mask_from_box(box_xyxy, image_rgb, image_rgba)
+                if text_like and refined_mask is not None:
+                    mask_png = refined_mask
+                elif mask_png is None and refined_mask is not None:
+                    mask_png = refined_mask
+                if mask_png is None:
+                    mask_png = self._mask_to_png(self._box_mask(box_xyxy, width, height), image_rgba)
             out.append(
                 {
                     "box": self._box_to_xywh(box_xyxy),
@@ -310,6 +384,7 @@ class ColabPipeline:
             logits_np = logits.cpu().numpy() if torch.is_tensor(logits) else logits
             h, w = image_rgb.shape[:2]
             out = []
+            text_like = self._is_text_like_label(payload.text)
             for i, b in enumerate(boxes_np[: payload.max_results]):
                 cx, cy, bw, bh = b
                 x1 = float((cx - bw / 2) * w)
@@ -317,7 +392,16 @@ class ColabPipeline:
                 x2 = float((cx + bw / 2) * w)
                 y2 = float((cy + bh / 2) * h)
                 box_xyxy = [x1, y1, x2, y2]
-                mask_png = self._generate_sam_mask(box_xyxy, image_rgb, image_rgba) if payload.return_masks else None
+                mask_png = None
+                if payload.return_masks:
+                    mask_png = self._generate_sam_mask(box_xyxy, image_rgb, image_rgba)
+                    refined_mask = self._contrast_mask_from_box(box_xyxy, image_rgb, image_rgba)
+                    if text_like and refined_mask is not None:
+                        mask_png = refined_mask
+                    elif mask_png is None and refined_mask is not None:
+                        mask_png = refined_mask
+                    if mask_png is None:
+                        mask_png = self._mask_to_png(self._box_mask(box_xyxy, w, h), image_rgba)
                 out.append(
                     {
                         "box": self._box_to_xywh(box_xyxy),
@@ -340,6 +424,11 @@ class ColabPipeline:
         image_rgba, image_rgb = self._prepare_image_arrays(image)
 
         mask_png = self._generate_sam_mask(box_xyxy, image_rgb, image_rgba)
+        refined_mask = self._contrast_mask_from_box(box_xyxy, image_rgb, image_rgba)
+        if self._is_text_like_label(label) and refined_mask is not None:
+            mask_png = refined_mask
+        elif mask_png is None and refined_mask is not None:
+            mask_png = refined_mask
         if mask_png is None:
             mask_png = self._mask_to_png(self._box_mask(box_xyxy, width, height), image_rgba)
 
