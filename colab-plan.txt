@@ -184,6 +184,14 @@ Actions:
 - ✅ Add svg_repair_colab_demo.ipynb with setup cells.
 - ✅ Include GPU check cells (nvidia-smi, torch.cuda.is_available()).
 - ✅ Include pip install core dependencies cell.
+- ✅ Add notebook cell to read Colab Secrets (`OPENROUTER_API_KEY`, `HF_TOKEN`, `SAM2_URL`, `BIG_LAMA_URL`).
+- ✅ Add notebook cell to download/bootstrap model assets during runtime:
+  - ✅ SAM2.1-B (`sam2.1_b.pt`, same version used in svg-repair)
+  - ✅ YOLO26L
+  - ✅ YOLO26X
+  - ✅ GroundingDINO config + weights
+  - ✅ Big-LaMa checkpoint (with fallback logic)
+- ✅ Export model env vars from notebook setup (`SAM_WEIGHTS`, `YOLO26L_WEIGHTS`, `YOLO26X_WEIGHTS`, `GDINO_CONFIG`, `GDINO_WEIGHTS`, `BIG_LAMA_CHECKPOINT`).
 Checkpoint commands:
 - ⬜ Run notebook setup cells from clean Colab runtime.
 Pass criteria:
@@ -196,6 +204,9 @@ Actions:
 - ✅ Reuse/copy required functions from svg-repair/fastapi/segment_service.py into colab_demo/services/pipeline.py.
 - ✅ Keep only required endpoints listed above.
 - ✅ Add colab_demo/services/config.py for env-based keys/weights.
+- ✅ Add local inpaint runner scripts under `colab_demo/services/` for notebook-configured commands:
+  - ✅ `inpaint_big_lama.py`
+  - ✅ `inpaint_qualcomm_lama_dilated.py`
 Checkpoint commands:
 - ⬜ Start API in notebook cell: uvicorn colab_demo.services.api:app --host 0.0.0.0 --port 5700
 - ⬜ curl /health
@@ -215,7 +226,7 @@ Step 4: Build minimal Gradio UI shell
 Actions:
 - ✅ Create colab_demo/ui/gradio_app.py.
 - ✅ Add image upload component.
-- ✅ Keep original image as the primary top panel and show processed inpaint preview in the process section.
+- ✅ Add two image panels (left original, right result).
 - ✅ Add prompt textbox and detect button.
 - ✅ Add selected object table/list.
 - ✅ Add process button.
@@ -228,9 +239,9 @@ Pass criteria:
 
 Step 5: Connect prompt detection flow
 Actions:
-- ✅ Wire prompt submit (Enter and button) to /detect.
+- ⬜ Wire prompt submit (Enter and button) to /detect.
 - ✅ Wire prompt detect button to /detect.
-- ✅ Overlay returned masks on left panel.
+- ⬜ Overlay returned masks on left panel.
 - ✅ Overlay returned boxes on left panel.
 - ✅ Append detections to a persistent selected object list.
 Checkpoint:
@@ -298,7 +309,7 @@ Step 11: Simplify flow and UX polish
 Actions:
 - ✅ Keep default path to 4 actions max: Upload -> Prompt detect/add -> Process -> Download.
 - ✅ Move secondary options to expandable advanced panel.
-- ✅ Improve status/progress text at each phase.
+- ⬜ Improve status/progress text at each phase.
 Checkpoint:
 - ⬜ Run by following only primary controls.
 Pass criteria:
@@ -344,6 +355,9 @@ YOLO26L_WEIGHTS=path to yolo26l weights file
 YOLO26X_WEIGHTS=path to yolo26x weights file
 GDINO_CONFIG=path to grounding dino config
 GDINO_WEIGHTS=path to grounding dino weights
+Notes:
+- ✅ Notebook now supports loading `OPENROUTER_API_KEY` from Colab Secrets.
+- ✅ Notebook now supports loading optional `HF_TOKEN`, `SAM2_URL`, and `BIG_LAMA_URL` from Colab Secrets.
 
 Definition of done
 1) Colab notebook launches UI and supports upload.
@@ -352,14 +366,3 @@ Definition of done
 4) Optional VisionSoC upscaling branch works and preserves offsets.
 5) Tracing + layered assembly produce downloadable SVG with metadata.
 6) Repo cleanup is completed only after full validation.
-
-Hotfix batch: inpaint + UI + API reliability
-Actions:
-- ✅ OpenRouter inpaint prompt now enforces mask-only edits, preserves unmasked pixels/composition, and fills hole seamlessly.
-- ✅ Processed inpaint preview moved to dedicated process section; original image remains the primary top image panel.
-- ✅ UI now returns actionable API-down message when connection is refused, including startup command and API base.
-- ✅ Explicit `method=gdino` now returns a clear API error when GDINO is unavailable (no full-image fallback in explicit GDINO mode).
-Checkpoint:
-- ⬜ Validate hotfixes in a live Colab run (detect masks, process text object, trace/assemble, object manager regression).
-Pass criteria:
-- ⬜ No full-image fallback for explicit GDINO; inpaint behavior preserves unmasked areas in runtime output.
