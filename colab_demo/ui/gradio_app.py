@@ -257,7 +257,7 @@ def relabel_selected_object(
 def clear_selected_objects(image: Image.Image):
     if image is None:
         return None, [], [], manager_dropdown_update([]), "Cleared selected objects."
-    return image, [], [], manager_dropdown_update([]), "Cleared selected objects."
+    return image.convert("RGBA"), [], [], manager_dropdown_update([]), "Cleared selected objects."
 
 
 def _should_upscale(label: str, upscale_mode: str) -> bool:
@@ -488,7 +488,7 @@ def trace_and_assemble(
 
 
 def clear_all():
-    return None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", "", None, "", None
+    return None, None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", None, "", None
 
 
 with gr.Blocks(title="SVG Repair Colab Demo") as demo:
@@ -499,6 +499,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
 
     with gr.Row():
         input_image = gr.Image(type="pil", label="Original")
+        detect_preview_image = gr.Image(type="pil", label="Detection Preview (Overlay)")
 
     status_text = gr.Textbox(label="Status", interactive=False)
 
@@ -563,36 +564,36 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
     detect_button.click(
         fn=add_detected_objects,
         inputs=[input_image, prompt_text, detect_method, min_score, max_results, selected_objects_state],
-        outputs=[input_image, selected_objects_state, objects_table, object_selector, status_text],
+        outputs=[detect_preview_image, selected_objects_state, objects_table, object_selector, status_text],
     )
     prompt_text.submit(
         fn=add_detected_objects,
         inputs=[input_image, prompt_text, detect_method, min_score, max_results, selected_objects_state],
-        outputs=[input_image, selected_objects_state, objects_table, object_selector, status_text],
+        outputs=[detect_preview_image, selected_objects_state, objects_table, object_selector, status_text],
     )
 
     add_manual_btn.click(
         fn=add_manual_box,
         inputs=[input_image, mx1, my1, mx2, my2, mlabel, selected_objects_state],
-        outputs=[input_image, selected_objects_state, objects_table, object_selector, status_text],
+        outputs=[detect_preview_image, selected_objects_state, objects_table, object_selector, status_text],
     )
 
     remove_object_button.click(
         fn=remove_selected_object,
         inputs=[input_image, selected_objects_state, object_selector],
-        outputs=[input_image, selected_objects_state, objects_table, object_selector, status_text],
+        outputs=[detect_preview_image, selected_objects_state, objects_table, object_selector, status_text],
     )
 
     relabel_object_button.click(
         fn=relabel_selected_object,
         inputs=[input_image, selected_objects_state, object_selector, relabel_text],
-        outputs=[input_image, selected_objects_state, objects_table, object_selector, status_text],
+        outputs=[detect_preview_image, selected_objects_state, objects_table, object_selector, status_text],
     )
 
     clear_selected_button.click(
         fn=clear_selected_objects,
         inputs=[input_image],
-        outputs=[input_image, selected_objects_state, objects_table, object_selector, status_text],
+        outputs=[detect_preview_image, selected_objects_state, objects_table, object_selector, status_text],
     )
 
     process_button.click(
@@ -611,6 +612,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
         fn=clear_all,
         outputs=[
             input_image,
+            detect_preview_image,
             inpaint_preview_image,
             selected_objects_state,
             objects_table,
