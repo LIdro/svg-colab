@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 import gradio as gr
 import numpy as np
 import requests
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 API_BASE = os.getenv("COLAB_API_BASE", "http://127.0.0.1:5700")
 VISION_SOC_URL = os.getenv("VISION_SOC_URL", "http://127.0.0.1:5050")
