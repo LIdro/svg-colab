@@ -1268,7 +1268,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
     with gr.Row():
         trace_button = gr.Button("Trace + Assemble SVG")
     svg_preview = gr.HTML(label="SVG Preview")
-    metadata = gr.Textbox(label="Metadata", interactive=False)
+    metadata = gr.Textbox(label="Metadata", interactive=False, lines=8)
     copy_svg_button = gr.Button("Copy SVG Code")
     copy_svg_status = gr.Textbox(label="Copy Status", interactive=False, value="SVG code copy status.")
     svg_code_mode = gr.Dropdown(["Hide", "Show"], value="Hide", label="SVG Code Display")
