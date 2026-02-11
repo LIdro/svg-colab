@@ -254,6 +254,26 @@ def add_detected_objects(
     if not prompt.strip():
         return image, selected_objects, objects_to_table(selected_objects), manager_dropdown_update(selected_objects), "Enter a prompt first."
 
+    if method == "gdino":
+        try:
+            ensure = api_post("/models/gdino/ensure", {"auto_download": True, "force_reload": False})
+            if not ensure.get("loaded", False):
+                return (
+                    image,
+                    selected_objects,
+                    objects_to_table(selected_objects),
+                    manager_dropdown_update(selected_objects),
+                    f"GDINO setup failed: {ensure.get('error') or 'unknown error'}",
+                )
+        except requests.RequestException as exc:
+            return (
+                image,
+                selected_objects,
+                objects_to_table(selected_objects),
+                manager_dropdown_update(selected_objects),
+                f"GDINO setup failed: {_api_error_text(exc)}",
+            )
+
     image_data = pil_to_data_uri(image)
     try:
         result = api_post(
