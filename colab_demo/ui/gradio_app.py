@@ -677,6 +677,176 @@ def run_inpaint(prepared_state_key: Optional[str]):
     return bg_image, bg_data, status, json.dumps(result.get("z_order_used", []), indent=2), debug_gallery
 
 
+def refresh_saved_states():
+    choices = _state_choices()
+    value = choices[0] if choices else None
+    return gr.update(choices=choices, value=value), "Saved states list refreshed."
+
+
+def save_current_state(
+    state_name: str,
+    input_image: Image.Image,
+    detect_preview_image: Image.Image,
+    selected_objects: List[Dict[str, Any]],
+    processed_background_data: Optional[str],
+    prepared_inpaint_key: Optional[str],
+    inpaint_preview_image: Image.Image,
+    z_order_text: str,
+    inpaint_debug_gallery: Any,
+    svg_preview_html: str,
+    svg_code_text: str,
+    metadata_text: str,
+    prompt: str,
+    detect_method: str,
+    min_score: float,
+    max_results: int,
+    mx1: float,
+    my1: float,
+    mx2: float,
+    my2: float,
+    mlabel: str,
+    provider: str,
+    model: str,
+    api_key: str,
+    use_z_order: bool,
+    upscale_mode: str,
+    upscale_quality: str,
+    split_text_layers: bool,
+    svg_code_mode: str,
+):
+    _ensure_state_store()
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    snapshot_id = str(uuid.uuid4())[:8]
+    prepared_payload = _PREPARED_INPAINT_CACHE.get(prepared_inpaint_key or "", None)
+    payload = {
+        "schema_version": 1,
+        "id": snapshot_id,
+        "name": (state_name or "").strip() or f"state-{snapshot_id}",
+        "saved_at": now,
+        "data": {
+            "input_image": _image_to_data_uri(input_image),
+            "detect_preview_image": _image_to_data_uri(detect_preview_image),
+            "selected_objects": selected_objects or [],
+            "processed_background_data": processed_background_data,
+            "prepared_payload": prepared_payload,
+            "inpaint_preview_image": _image_to_data_uri(inpaint_preview_image),
+            "z_order_text": z_order_text or "",
+            "inpaint_debug_gallery": _gallery_to_serializable(inpaint_debug_gallery),
+            "svg_preview_html": svg_preview_html or "",
+            "svg_code_text": svg_code_text or "",
+            "metadata_text": metadata_text or "",
+            "controls": {
+                "prompt": prompt,
+                "detect_method": detect_method,
+                "min_score": min_score,
+                "max_results": max_results,
+                "mx1": mx1,
+                "my1": my1,
+                "mx2": mx2,
+                "my2": my2,
+                "mlabel": mlabel,
+                "provider": provider,
+                "model": model,
+                "api_key": api_key,
+                "use_z_order": use_z_order,
+                "upscale_mode": upscale_mode,
+                "upscale_quality": upscale_quality,
+                "split_text_layers": split_text_layers,
+                "svg_code_mode": svg_code_mode,
+            },
+        },
+    }
+    snap_path = STATE_DIR / f"{snapshot_id}.json"
+    snap_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    index_rows = _load_state_index()
+    index_rows = [row for row in index_rows if row.get("id") != snapshot_id]
+    index_rows.append({"id": snapshot_id, "name": payload["name"], "saved_at": now})
+    _save_state_index(index_rows)
+
+    choices = _state_choices()
+    selected = next((c for c in choices if c.startswith(snapshot_id + " | ")), choices[0] if choices else None)
+    return (
+        f"State saved: {payload['name']} ({snapshot_id})",
+        gr.update(choices=choices, value=selected),
+        payload["name"],
+    )
+
+
+def load_saved_state(choice: str):
+    snapshot_id = _state_id_from_choice(choice)
+    if not snapshot_id:
+        return (
+            None, None, [], [], manager_dropdown_update([]), None, None, None, "", [], "", "", None, "",
+            "", "yolo26l", 0.3, 5, 10, 10, 200, 200, "manual object", "big-lama", "", "", True, "none",
+            "balanced", False, "Hide", "SVG code copy status.", "Choose a saved state first.",
+        )
+
+    path = STATE_DIR / f"{snapshot_id}.json"
+    if not path.exists():
+        return (
+            None, None, [], [], manager_dropdown_update([]), None, None, None, "", [], "", "", None, "",
+            "", "yolo26l", 0.3, 5, 10, 10, 200, 200, "manual object", "big-lama", "", "", True, "none",
+            "balanced", False, "Hide", "SVG code copy status.", f"Saved state not found: {snapshot_id}",
+        )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    data = payload.get("data", {})
+    controls = data.get("controls", {})
+    selected_objects = data.get("selected_objects", []) if isinstance(data.get("selected_objects"), list) else []
+
+    input_image = _data_uri_to_image(data.get("input_image"))
+    detect_preview = _data_uri_to_image(data.get("detect_preview_image"))
+    inpaint_preview = _data_uri_to_image(data.get("inpaint_preview_image"))
+    if inpaint_preview is None and data.get("processed_background_data"):
+        inpaint_preview = _data_uri_to_image(data.get("processed_background_data"))
+
+    prepared_payload = data.get("prepared_payload")
+    prepared_key = None
+    if isinstance(prepared_payload, dict) and prepared_payload.get("payload"):
+        prepared_key = str(uuid.uuid4())
+        _PREPARED_INPAINT_CACHE[prepared_key] = prepared_payload
+
+    svg_code_text = str(data.get("svg_code_text", ""))
+    download_svg = _svg_to_temp_file(svg_code_text)
+
+    return (
+        input_image,
+        detect_preview,
+        selected_objects,
+        objects_to_table(selected_objects),
+        manager_dropdown_update(selected_objects),
+        data.get("processed_background_data"),
+        prepared_key,
+        inpaint_preview,
+        str(data.get("z_order_text", "")),
+        _gallery_from_serialized(data.get("inpaint_debug_gallery")),
+        str(data.get("svg_preview_html", "")),
+        svg_code_text,
+        download_svg,
+        str(data.get("metadata_text", "")),
+        controls.get("prompt", ""),
+        controls.get("detect_method", "yolo26l"),
+        float(controls.get("min_score", 0.3)),
+        int(controls.get("max_results", 5)),
+        float(controls.get("mx1", 10)),
+        float(controls.get("my1", 10)),
+        float(controls.get("mx2", 200)),
+        float(controls.get("my2", 200)),
+        controls.get("mlabel", "manual object"),
+        controls.get("provider", "big-lama"),
+        controls.get("model", ""),
+        controls.get("api_key", ""),
+        bool(controls.get("use_z_order", True)),
+        controls.get("upscale_mode", "none"),
+        controls.get("upscale_quality", "balanced"),
+        bool(controls.get("split_text_layers", False)),
+        controls.get("svg_code_mode", "Hide"),
+        "SVG code copy status.",
+        f"Loaded state: {payload.get('name', snapshot_id)} ({snapshot_id})",
+    )
+
+
 def trace_and_assemble(
     image: Image.Image,
     processed_background_data: str,
