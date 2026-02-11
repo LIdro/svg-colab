@@ -1094,7 +1094,7 @@ def trace_and_assemble(
         label = layer.get("label", "")
         path_count = int(layer.get("stats", {}).get("path_count", 0))
         if path_count <= 0:
-            path_count = len(re.findall(r"<path\\b", svg_paths, re.IGNORECASE))
+            path_count = len(re.findall(r"<path\b", svg_paths, re.IGNORECASE))
         total_paths += path_count
         layer_path_rows.append({"id": layer["id"], "label": label, "path_count": path_count, "svg_paths": svg_paths})
 
