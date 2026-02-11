@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -61,6 +62,9 @@ class ColabPipeline:
         self.gdino_model = None
         self.gdino_predict = None
         self.gdino_load_image = None
+        self.gdino_load_error: Optional[str] = None
+        self.gdino_config_path: Optional[str] = None
+        self.gdino_weights_path: Optional[str] = None
         self._loaded = False
 
     def _decode_image(self, image_data: str) -> Image.Image:
@@ -195,6 +199,87 @@ class ColabPipeline:
         mask[y1:y2, x1:x2] = fg.astype(np.uint8) * 255
         return self._mask_to_png(mask, image_rgba)
 
+    def _resolve_model_path(self, env_key: str, fallback: str, expected_name: str) -> Optional[str]:
+        raw = os.getenv(env_key, fallback)
+        p = Path(raw).expanduser()
+        if p.exists():
+            return str(p)
+
+        filename = p.name if p.name else expected_name
+        candidates = [
+            Path.cwd() / filename,
+            Path("/content/svg-colab/.colab_models") / filename,
+            Path("/content/.colab_models") / filename,
+            Path("/content") / filename,
+        ]
+        for cand in candidates:
+            if cand.exists():
+                return str(cand)
+        return None
+
+    def _load_gdino_if_needed(self, force_reload: bool = False) -> None:
+        if self.gdino_model is not None and not force_reload:
+            return
+
+        global load_gdino_model, gdino_predict, load_image
+
+        self.gdino_load_error = None
+        self.gdino_config_path = self._resolve_model_path("GDINO_CONFIG", settings.gdino_config, "groundingdino_swint_ogc.cfg.py")
+        self.gdino_weights_path = self._resolve_model_path("GDINO_WEIGHTS", settings.gdino_weights, "groundingdino_swint_ogc.pth")
+
+        if load_gdino_model is None or gdino_predict is None or load_image is None:
+            try:
+                from groundingdino.util.inference import (
+                    load_image as _load_image,
+                    load_model as _load_model,
+                    predict as _predict,
+                )
+
+                load_gdino_model = _load_model
+                gdino_predict = _predict
+                load_image = _load_image
+            except Exception as exc:
+                self.gdino_model = None
+                self.gdino_predict = None
+                self.gdino_load_image = None
+                self.gdino_load_error = (
+                    "GroundingDINO python package import failed. "
+                    "Install it with: pip install git+https://github.com/IDEA-Research/GroundingDINO.git "
+                    f"(error: {exc})"
+                )
+                return
+
+        self.gdino_predict = gdino_predict
+        self.gdino_load_image = load_image
+
+        missing = []
+        if not self.gdino_config_path:
+            missing.append("GDINO_CONFIG")
+        if not self.gdino_weights_path:
+            missing.append("GDINO_WEIGHTS")
+        if missing:
+            self.gdino_model = None
+            self.gdino_load_error = (
+                "Missing GroundingDINO model files. "
+                f"Unavailable: {', '.join(missing)}. "
+                f"Resolved paths: config={self.gdino_config_path}, weights={self.gdino_weights_path}"
+            )
+            return
+
+        try:
+            device = "cpu"
+            import torch
+
+            if torch.cuda.is_available():
+                device = "cuda"
+            self.gdino_model = load_gdino_model(self.gdino_config_path, self.gdino_weights_path, device=device)
+        except Exception as exc:
+            self.gdino_model = None
+            self.gdino_load_error = (
+                "Failed to initialize GroundingDINO model. "
+                f"config={self.gdino_config_path}, weights={self.gdino_weights_path}, error={exc}"
+            )
+
     def _load_models_if_needed(self) -> None:
         if self._loaded:
             return
@@ -247,18 +332,7 @@ class ColabPipeline:
                 except Exception:
                     pass
 
-        if load_gdino_model is not None and os.path.exists(settings.gdino_config) and os.path.exists(settings.gdino_weights):
-            try:
-                device = "cpu"
-                import torch
-
-                if torch.cuda.is_available():
-                    device = "cuda"
-                self.gdino_model = load_gdino_model(settings.gdino_config, settings.gdino_weights, device=device)
-                self.gdino_predict = gdino_predict
-                self.gdino_load_image = load_image
-            except Exception:
-                self.gdino_model = None
+        self._load_gdino_if_needed(force_reload=False)
 
     def detect(self, payload: DetectRequest) -> DetectResponse:
         self._load_models_if_needed()
@@ -267,13 +341,16 @@ class ColabPipeline:
         image_rgba, image_rgb = self._prepare_image_arrays(image)
 
         if payload.method == "gdino":
+            if self.gdino_model is None:
+                self._load_gdino_if_needed(force_reload=True)
             if self.gdino_model is not None and self.gdino_predict is not None and self.gdino_load_image is not None:
                 return self._detect_with_gdino(payload, image, image_rgba, image_rgb)
             raise HTTPException(
                 status_code=503,
                 detail=(
                     "GDINO was explicitly requested but GroundingDINO is not loaded. "
-                    "Set GDINO_CONFIG and GDINO_WEIGHTS to valid files, then restart the API."
+                    "Set GDINO_CONFIG and GDINO_WEIGHTS to valid files, then restart the API. "
+                    f"Details: {self.gdino_load_error or 'unknown error'}"
                 ),
             )
         if payload.method in ("yolo26l", "yolo26x"):
