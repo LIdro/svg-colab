@@ -4,10 +4,12 @@ import base64
 import io
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -270,6 +272,63 @@ class ColabPipeline:
             out.append(p)
         return out
 
+    def _download_groundingdino_source(self) -> Optional[Path]:
+        allow = os.getenv("GDINO_AUTO_SOURCE_DOWNLOAD", "true").lower() == "true"
+        if not allow:
+            return None
+
+        vendor_root = Path(os.getenv("GDINO_VENDOR_ROOT", "/content/svg-colab/.vendor")).expanduser()
+        vendor_root.mkdir(parents=True, exist_ok=True)
+        final_dir = vendor_root / "GroundingDINO"
+        if (final_dir / "groundingdino" / "util" / "inference.py").exists():
+            return final_dir
+
+        zip_url = os.getenv(
+            "GDINO_SOURCE_ZIP_URL",
+            "https://github.com/IDEA-Research/GroundingDINO/archive/refs/heads/main.zip",
+        )
+        tmp_zip = vendor_root / "groundingdino_main.zip"
+        tmp_extract = vendor_root / "groundingdino_extract"
+        try:
+            with requests.get(zip_url, stream=True, timeout=120) as resp:
+                resp.raise_for_status()
+                with open(tmp_zip, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
+
+            if tmp_extract.exists():
+                shutil.rmtree(tmp_extract)
+            tmp_extract.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(tmp_zip, "r") as zf:
+                zf.extractall(tmp_extract)
+
+            extracted = None
+            for child in tmp_extract.iterdir():
+                if child.is_dir() and (child / "groundingdino" / "util" / "inference.py").exists():
+                    extracted = child
+                    break
+            if extracted is None:
+                return None
+
+            if final_dir.exists():
+                shutil.rmtree(final_dir)
+            shutil.move(str(extracted), str(final_dir))
+            return final_dir
+        except Exception:
+            return None
+        finally:
+            try:
+                if tmp_zip.exists():
+                    tmp_zip.unlink()
+            except Exception:
+                pass
+            try:
+                if tmp_extract.exists():
+                    shutil.rmtree(tmp_extract)
+            except Exception:
+                pass
+
     def _import_groundingdino_inference(self) -> tuple[Any, Any, Any]:
         try:
             from groundingdino.util.inference import (
@@ -294,7 +353,27 @@ class ColabPipeline:
             except Exception:
                 continue
 
-        raise ImportError("Could not import groundingdino.util.inference from site-packages or local fallback paths.")
+        downloaded = self._download_groundingdino_source()
+        if downloaded is not None and str(downloaded) not in sys.path:
+            sys.path.insert(0, str(downloaded))
+        if downloaded is not None:
+            try:
+                from groundingdino.util.inference import (
+                    load_image as _load_image,
+                    load_model as _load_model,
+                    predict as _predict,
+                )
+                return _load_model, _predict, _load_image
+            except Exception:
+                pass
+
+        tried = [str(p) for p in self._candidate_groundingdino_paths()]
+        if downloaded is not None:
+            tried.append(str(downloaded))
+        raise ImportError(
+            "Could not import groundingdino.util.inference. "
+            f"Tried paths: {tried}"
+        )
 
     def _groundingdino_custom_ops_available(self) -> bool:
         try:
