@@ -1208,6 +1208,8 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
         saved_states_dropdown = gr.Dropdown(choices=_state_choices(), label="Saved States")
         refresh_states_button = gr.Button("Refresh States")
         load_state_button = gr.Button("Load Selected State")
+        overwrite_state_button = gr.Button("Overwrite Selected State")
+        delete_state_button = gr.Button("Delete Selected State")
 
     inpaint_preview_image = gr.Image(type="pil", label="Inpaint Preview (Processed Background)", height=300)
     z_order_box = gr.Code(label="Z-Order Used", language="json")
@@ -1340,6 +1342,49 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
     refresh_states_button.click(
         fn=refresh_saved_states,
         outputs=[saved_states_dropdown, status_text],
+    )
+
+    overwrite_state_button.click(
+        fn=overwrite_selected_state,
+        inputs=[
+            saved_states_dropdown,
+            state_name_input,
+            input_image,
+            detect_preview_image,
+            selected_objects_state,
+            processed_background_state,
+            prepared_inpaint_state,
+            inpaint_preview_image,
+            z_order_box,
+            inpaint_debug_gallery,
+            svg_preview,
+            svg_code,
+            metadata,
+            prompt_text,
+            detect_method,
+            min_score,
+            max_results,
+            mx1,
+            my1,
+            mx2,
+            my2,
+            mlabel,
+            provider,
+            model,
+            api_key,
+            use_z_order,
+            upscale_mode,
+            upscale_quality,
+            split_text_layers,
+            svg_code_mode,
+        ],
+        outputs=[status_text, saved_states_dropdown, state_name_input],
+    )
+
+    delete_state_button.click(
+        fn=delete_selected_state,
+        inputs=[saved_states_dropdown],
+        outputs=[status_text, saved_states_dropdown, state_name_input],
     )
 
     load_state_button.click(
