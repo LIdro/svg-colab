@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import html
 import io
 import json
 import os
+import re
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -1072,6 +1074,7 @@ def trace_and_assemble(
 
     assembled_layers = []
     total_paths = 0
+    layer_path_rows = []
     for z, layer in enumerate(traced.get("layers", [])):
         svg_paths = layer.get("svg_paths", "")
         offset = layer.get("offset")
@@ -1088,7 +1091,12 @@ def trace_and_assemble(
                 "hidden": False,
             }
         )
-        total_paths += int(layer.get("stats", {}).get("path_count", 0))
+        label = layer.get("label", "")
+        path_count = int(layer.get("stats", {}).get("path_count", 0))
+        if path_count <= 0:
+            path_count = len(re.findall(r"<path\\b", svg_paths, re.IGNORECASE))
+        total_paths += path_count
+        layer_path_rows.append({"id": layer["id"], "label": label, "path_count": path_count, "svg_paths": svg_paths})
 
     w, h = image.size
     try:
@@ -1101,11 +1109,47 @@ def trace_and_assemble(
         f.write(svg_text.encode("utf-8"))
         svg_file = f.name
 
-    metadata = f"Layers: {len(assembled_layers)} | Paths: {total_paths}"
+    metadata_lines = [f"Layers: {len(assembled_layers)} | Total Paths: {total_paths}", "Per-layer paths:"]
+    for row in layer_path_rows:
+        display_label = row["label"] or row["id"]
+        metadata_lines.append(f"- {display_label} [{row['id']}]: {row['path_count']}")
+    metadata = "\n".join(metadata_lines)
+
+    preview_uid = str(uuid.uuid4())[:8]
+    layer_controls = []
+    preview_groups = []
+    for row in layer_path_rows:
+        safe_id_attr = re.sub(r"[^A-Za-z0-9_-]", "_", str(row["id"]))
+        safe_label = html.escape(str(row["label"] or row["id"]))
+        layer_controls.append(
+            f"<label style='display:block; margin:4px 0;'>"
+            f"<input type='checkbox' checked onchange=\"toggleLayer_{preview_uid}('{safe_id_attr}', this.checked)\"> "
+            f"{safe_label} ({row['path_count']} paths)</label>"
+        )
+        preview_groups.append(f"<g data-layer-id=\"{safe_id_attr}\">{row['svg_paths']}</g>")
+
+    w, h = image.size
+    preview_svg = (
+        f"<svg id='svg-root-{preview_uid}' xmlns='http://www.w3.org/2000/svg' "
+        f"viewBox='0 0 {w} {h}' width='100%' height='100%' preserveAspectRatio='xMidYMid meet'>"
+        + "".join(preview_groups)
+        + "</svg>"
+    )
     preview_html = (
-        "<div style=\"border:1px solid #ccc; background:white; height:300px; overflow:auto;\">"
-        f"{svg_text}"
+        "<div style='border:1px solid #ccc; background:#fff; padding:8px;'>"
+        f"<div style='height:300px; overflow:hidden; border:1px solid #ddd;'>{preview_svg}</div>"
+        "<div style='margin-top:8px; max-height:140px; overflow:auto; border-top:1px solid #eee; padding-top:6px;'>"
+        + "".join(layer_controls)
+        + "</div>"
         "</div>"
+        f"<script>"
+        f"function toggleLayer_{preview_uid}(layerId, visible){{"
+        f"  const root=document.getElementById('svg-root-{preview_uid}');"
+        f"  if(!root) return;"
+        f"  const group=root.querySelector('[data-layer-id=\"'+layerId+'\"]');"
+        f"  if(group) group.style.display=visible ? '' : 'none';"
+        f"}}"
+        f"</script>"
     )
     return preview_html, svg_text, svg_file, metadata
 
