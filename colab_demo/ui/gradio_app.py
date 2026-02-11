@@ -640,6 +640,7 @@ def trace_and_assemble(
 
 
 def clear_all():
+    _PREPARED_INPAINT_CACHE.clear()
     return None, None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", "", None, "", None, [], None
 
 
