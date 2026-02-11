@@ -5,6 +5,7 @@ import io
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -217,6 +218,66 @@ class ColabPipeline:
                 return str(cand)
         return None
 
+    def _candidate_groundingdino_paths(self) -> List[Path]:
+        paths: List[Path] = []
+        env_path = os.getenv("GROUNDINGDINO_LOCAL_PATH", "").strip()
+        if env_path:
+            p = Path(env_path).expanduser()
+            if (p / "groundingdino" / "util" / "inference.py").exists():
+                paths.append(p)
+
+        here = Path(__file__).resolve()
+        for base in [Path.cwd(), *here.parents]:
+            for rel in ("svg-repair/fastapi/GroundingDINO", "GroundingDINO"):
+                cand = (base / rel).resolve()
+                if (cand / "groundingdino" / "util" / "inference.py").exists():
+                    paths.append(cand)
+
+        # Deduplicate while preserving order.
+        seen = set()
+        out: List[Path] = []
+        for p in paths:
+            key = str(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(p)
+        return out
+
+    def _import_groundingdino_inference(self) -> tuple[Any, Any, Any]:
+        try:
+            from groundingdino.util.inference import (
+                load_image as _load_image,
+                load_model as _load_model,
+                predict as _predict,
+            )
+            return _load_model, _predict, _load_image
+        except Exception:
+            pass
+
+        for candidate in self._candidate_groundingdino_paths():
+            if str(candidate) not in sys.path:
+                sys.path.insert(0, str(candidate))
+            try:
+                from groundingdino.util.inference import (
+                    load_image as _load_image,
+                    load_model as _load_model,
+                    predict as _predict,
+                )
+                return _load_model, _predict, _load_image
+            except Exception:
+                continue
+
+        raise ImportError("Could not import groundingdino.util.inference from site-packages or local fallback paths.")
+
+    def _groundingdino_custom_ops_available(self) -> bool:
+        try:
+            import groundingdino.models.GroundingDINO.ms_deform_attn as ms_deform_attn
+
+            return hasattr(ms_deform_attn, "_C") and ms_deform_attn._C is not None
+        except Exception:
+            return False
+
     def _load_gdino_if_needed(self, force_reload: bool = False) -> None:
         if self.gdino_model is not None and not force_reload:
             return
@@ -229,12 +290,7 @@ class ColabPipeline:
 
         if load_gdino_model is None or gdino_predict is None or load_image is None:
             try:
-                from groundingdino.util.inference import (
-                    load_image as _load_image,
-                    load_model as _load_model,
-                    predict as _predict,
-                )
-
+                _load_model, _predict, _load_image = self._import_groundingdino_inference()
                 load_gdino_model = _load_model
                 gdino_predict = _predict
                 load_image = _load_image
@@ -243,8 +299,10 @@ class ColabPipeline:
                 self.gdino_predict = None
                 self.gdino_load_image = None
                 self.gdino_load_error = (
-                    "GroundingDINO python package import failed. "
-                    "Install it with: pip install git+https://github.com/IDEA-Research/GroundingDINO.git "
+                    "GroundingDINO import failed. "
+                    "Install inference deps (transformers/timm/addict/yapf/supervision) "
+                    "and ensure either a working groundingdino package or local "
+                    "`svg-repair/fastapi/GroundingDINO` source is present. "
                     f"(error: {exc})"
                 )
                 return
@@ -267,10 +325,12 @@ class ColabPipeline:
             return
 
         try:
+            # If custom C++ ops are unavailable (common in Colab/Python 3.12), keep GDINO on CPU
+            # to avoid CUDA path requiring groundingdino._C.
             device = "cpu"
             import torch
 
-            if torch.cuda.is_available():
+            if torch.cuda.is_available() and self._groundingdino_custom_ops_available():
                 device = "cuda"
             self.gdino_model = load_gdino_model(self.gdino_config_path, self.gdino_weights_path, device=device)
         except Exception as exc:
