@@ -932,7 +932,28 @@ def trace_and_assemble(
 
 def clear_all():
     _PREPARED_INPAINT_CACHE.clear()
-    return None, None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", "", None, "", None, [], None, "Hide", "SVG code copy status."
+    choices = _state_choices()
+    return (
+        None,
+        None,
+        None,
+        [],
+        [],
+        manager_dropdown_update([]),
+        "Cleared.",
+        "",
+        "",
+        "",
+        None,
+        "",
+        None,
+        [],
+        None,
+        "Hide",
+        "SVG code copy status.",
+        gr.update(choices=choices, value=(choices[0] if choices else None)),
+        "",
+    )
 
 
 def toggle_svg_code_visibility(mode: str):
