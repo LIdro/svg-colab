@@ -218,6 +218,32 @@ class ColabPipeline:
                 return str(cand)
         return None
 
+    def _gdino_target_paths(self) -> tuple[Path, Path]:
+        cfg_raw = os.getenv("GDINO_CONFIG", settings.gdino_config)
+        w_raw = os.getenv("GDINO_WEIGHTS", settings.gdino_weights)
+        default_root = Path("/content/svg-colab/.colab_models")
+        default_root.mkdir(parents=True, exist_ok=True)
+
+        def pick(raw: str, default_name: str) -> Path:
+            p = Path(raw).expanduser()
+            if p.is_absolute() or "/" in raw:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                return p
+            return default_root / (p.name if p.name else default_name)
+
+        return pick(cfg_raw, "groundingdino_swint_ogc.cfg.py"), pick(w_raw, "groundingdino_swint_ogc.pth")
+
+    def _download_file_if_missing(self, url: str, dst: Path) -> None:
+        if dst.exists() and dst.stat().st_size > 0:
+            return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        with requests.get(url, stream=True, timeout=120) as resp:
+            resp.raise_for_status()
+            with open(dst, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+
     def _candidate_groundingdino_paths(self) -> List[Path]:
         paths: List[Path] = []
         env_path = os.getenv("GROUNDINGDINO_LOCAL_PATH", "").strip()
@@ -345,7 +371,7 @@ class ColabPipeline:
             return
         self._loaded = True
 
-        global SAM, YOLOE, load_gdino_model, gdino_predict, load_image
+        global SAM, YOLOE
 
         if SAM is None or YOLOE is None:
             try:
@@ -356,23 +382,6 @@ class ColabPipeline:
             except Exception:
                 SAM = None
                 YOLOE = None
-
-        if load_gdino_model is None or gdino_predict is None or load_image is None:
-            try:
-                from groundingdino.util.inference import (
-                    load_image as _load_image,
-                    load_model as _load_model,
-                    predict as _predict,
-                )
-
-                load_gdino_model = _load_model
-                gdino_predict = _predict
-                load_image = _load_image
-                self.gdino_predict = _predict
-                self.gdino_load_image = _load_image
-            except Exception:
-                self.gdino_predict = None
-                self.gdino_load_image = None
 
         if SAM is not None:
             try:
@@ -394,6 +403,47 @@ class ColabPipeline:
 
         self._load_gdino_if_needed(force_reload=False)
 
+    def ensure_gdino(self, auto_download: bool = True, force_reload: bool = False) -> Dict[str, Any]:
+        self._load_models_if_needed()
+        result: Dict[str, Any] = {
+            "loaded": False,
+            "downloaded_config": False,
+            "downloaded_weights": False,
+            "config_path": self.gdino_config_path,
+            "weights_path": self.gdino_weights_path,
+            "error": None,
+        }
+
+        if auto_download:
+            cfg_dst, w_dst = self._gdino_target_paths()
+            cfg_url = os.getenv(
+                "GDINO_CONFIG_URL",
+                "https://raw.githubusercontent.com/IDEA-Research/GroundingDINO/main/groundingdino/config/GroundingDINO_SwinT_OGC.py",
+            )
+            w_url = os.getenv(
+                "GDINO_WEIGHTS_URL",
+                "https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth",
+            )
+            try:
+                pre_cfg = cfg_dst.exists() and cfg_dst.stat().st_size > 0
+                pre_w = w_dst.exists() and w_dst.stat().st_size > 0
+                self._download_file_if_missing(cfg_url, cfg_dst)
+                self._download_file_if_missing(w_url, w_dst)
+                os.environ["GDINO_CONFIG"] = str(cfg_dst)
+                os.environ["GDINO_WEIGHTS"] = str(w_dst)
+                result["downloaded_config"] = not pre_cfg and cfg_dst.exists()
+                result["downloaded_weights"] = not pre_w and w_dst.exists()
+            except Exception as exc:
+                result["error"] = f"GDINO download failed: {exc}"
+
+        self._load_gdino_if_needed(force_reload=force_reload or auto_download)
+        result["loaded"] = self.gdino_model is not None and self.gdino_predict is not None and self.gdino_load_image is not None
+        result["config_path"] = self.gdino_config_path
+        result["weights_path"] = self.gdino_weights_path
+        if not result["loaded"]:
+            result["error"] = self.gdino_load_error or result["error"] or "unknown error"
+        return result
+
     def detect(self, payload: DetectRequest) -> DetectResponse:
         self._load_models_if_needed()
         image = self._decode_image(payload.image_data)
@@ -402,7 +452,7 @@ class ColabPipeline:
 
         if payload.method == "gdino":
             if self.gdino_model is None:
-                self._load_gdino_if_needed(force_reload=True)
+                self.ensure_gdino(auto_download=True, force_reload=True)
             if self.gdino_model is not None and self.gdino_predict is not None and self.gdino_load_image is not None:
                 return self._detect_with_gdino(payload, image, image_rgba, image_rgb)
             raise HTTPException(

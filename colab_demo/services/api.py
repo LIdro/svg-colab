@@ -8,6 +8,8 @@ from .contracts import (
     AssembleResponse,
     DetectRequest,
     DetectResponse,
+    GdinoEnsureRequest,
+    GdinoEnsureResponse,
     HealthResponse,
     ManualBoxRequest,
     ManualBoxResponse,
@@ -34,6 +36,11 @@ app.add_middleware(
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
+
+
+@app.post("/models/gdino/ensure", response_model=GdinoEnsureResponse)
+def ensure_gdino(payload: GdinoEnsureRequest) -> GdinoEnsureResponse:
+    return GdinoEnsureResponse(**pipeline.ensure_gdino(auto_download=payload.auto_download, force_reload=payload.force_reload))
 
 
 @app.post("/detect", response_model=DetectResponse)

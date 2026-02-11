@@ -165,3 +165,17 @@ class AssembleResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+
+
+class GdinoEnsureRequest(BaseModel):
+    auto_download: bool = True
+    force_reload: bool = False
+
+
+class GdinoEnsureResponse(BaseModel):
+    loaded: bool
+    downloaded_config: bool
+    downloaded_weights: bool
+    config_path: Optional[str] = None
+    weights_path: Optional[str] = None
+    error: Optional[str] = None
