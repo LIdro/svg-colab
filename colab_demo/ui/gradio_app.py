@@ -683,6 +683,71 @@ def refresh_saved_states():
     return gr.update(choices=choices, value=value), "Saved states list refreshed."
 
 
+def _snapshot_data_from_inputs(
+    input_image: Image.Image,
+    detect_preview_image: Image.Image,
+    selected_objects: List[Dict[str, Any]],
+    processed_background_data: Optional[str],
+    prepared_inpaint_key: Optional[str],
+    inpaint_preview_image: Image.Image,
+    z_order_text: str,
+    inpaint_debug_gallery: Any,
+    svg_preview_html: str,
+    svg_code_text: str,
+    metadata_text: str,
+    prompt: str,
+    detect_method: str,
+    min_score: float,
+    max_results: int,
+    mx1: float,
+    my1: float,
+    mx2: float,
+    my2: float,
+    mlabel: str,
+    provider: str,
+    model: str,
+    api_key: str,
+    use_z_order: bool,
+    upscale_mode: str,
+    upscale_quality: str,
+    split_text_layers: bool,
+    svg_code_mode: str,
+) -> Dict[str, Any]:
+    prepared_payload = _PREPARED_INPAINT_CACHE.get(prepared_inpaint_key or "", None)
+    return {
+        "input_image": _image_to_data_uri(input_image),
+        "detect_preview_image": _image_to_data_uri(detect_preview_image),
+        "selected_objects": selected_objects or [],
+        "processed_background_data": processed_background_data,
+        "prepared_payload": prepared_payload,
+        "inpaint_preview_image": _image_to_data_uri(inpaint_preview_image),
+        "z_order_text": z_order_text or "",
+        "inpaint_debug_gallery": _gallery_to_serializable(inpaint_debug_gallery),
+        "svg_preview_html": svg_preview_html or "",
+        "svg_code_text": svg_code_text or "",
+        "metadata_text": metadata_text or "",
+        "controls": {
+            "prompt": prompt,
+            "detect_method": detect_method,
+            "min_score": min_score,
+            "max_results": max_results,
+            "mx1": mx1,
+            "my1": my1,
+            "mx2": mx2,
+            "my2": my2,
+            "mlabel": mlabel,
+            "provider": provider,
+            "model": model,
+            "api_key": api_key,
+            "use_z_order": use_z_order,
+            "upscale_mode": upscale_mode,
+            "upscale_quality": upscale_quality,
+            "split_text_layers": split_text_layers,
+            "svg_code_mode": svg_code_mode,
+        },
+    }
+
+
 def save_current_state(
     state_name: str,
     input_image: Image.Image,
@@ -717,44 +782,41 @@ def save_current_state(
     _ensure_state_store()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     snapshot_id = str(uuid.uuid4())[:8]
-    prepared_payload = _PREPARED_INPAINT_CACHE.get(prepared_inpaint_key or "", None)
     payload = {
         "schema_version": 1,
         "id": snapshot_id,
         "name": (state_name or "").strip() or f"state-{snapshot_id}",
         "saved_at": now,
-        "data": {
-            "input_image": _image_to_data_uri(input_image),
-            "detect_preview_image": _image_to_data_uri(detect_preview_image),
-            "selected_objects": selected_objects or [],
-            "processed_background_data": processed_background_data,
-            "prepared_payload": prepared_payload,
-            "inpaint_preview_image": _image_to_data_uri(inpaint_preview_image),
-            "z_order_text": z_order_text or "",
-            "inpaint_debug_gallery": _gallery_to_serializable(inpaint_debug_gallery),
-            "svg_preview_html": svg_preview_html or "",
-            "svg_code_text": svg_code_text or "",
-            "metadata_text": metadata_text or "",
-            "controls": {
-                "prompt": prompt,
-                "detect_method": detect_method,
-                "min_score": min_score,
-                "max_results": max_results,
-                "mx1": mx1,
-                "my1": my1,
-                "mx2": mx2,
-                "my2": my2,
-                "mlabel": mlabel,
-                "provider": provider,
-                "model": model,
-                "api_key": api_key,
-                "use_z_order": use_z_order,
-                "upscale_mode": upscale_mode,
-                "upscale_quality": upscale_quality,
-                "split_text_layers": split_text_layers,
-                "svg_code_mode": svg_code_mode,
-            },
-        },
+        "data": _snapshot_data_from_inputs(
+            input_image,
+            detect_preview_image,
+            selected_objects,
+            processed_background_data,
+            prepared_inpaint_key,
+            inpaint_preview_image,
+            z_order_text,
+            inpaint_debug_gallery,
+            svg_preview_html,
+            svg_code_text,
+            metadata_text,
+            prompt,
+            detect_method,
+            min_score,
+            max_results,
+            mx1,
+            my1,
+            mx2,
+            my2,
+            mlabel,
+            provider,
+            model,
+            api_key,
+            use_z_order,
+            upscale_mode,
+            upscale_quality,
+            split_text_layers,
+            svg_code_mode,
+        ),
     }
     snap_path = STATE_DIR / f"{snapshot_id}.json"
     snap_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -770,6 +832,124 @@ def save_current_state(
         f"State saved: {payload['name']} ({snapshot_id})",
         gr.update(choices=choices, value=selected),
         payload["name"],
+    )
+
+
+def delete_selected_state(choice: str):
+    snapshot_id = _state_id_from_choice(choice)
+    if not snapshot_id:
+        return "Choose a saved state to delete.", gr.update(), gr.update()
+
+    snap_path = STATE_DIR / f"{snapshot_id}.json"
+    if snap_path.exists():
+        try:
+            snap_path.unlink()
+        except Exception as exc:
+            return f"Failed to delete state {snapshot_id}: {exc}", gr.update(), gr.update()
+
+    index_rows = [row for row in _load_state_index() if row.get("id") != snapshot_id]
+    _save_state_index(index_rows)
+    choices = _state_choices()
+    value = choices[0] if choices else None
+    return (
+        f"Deleted state: {snapshot_id}",
+        gr.update(choices=choices, value=value),
+        "",
+    )
+
+
+def overwrite_selected_state(
+    choice: str,
+    state_name: str,
+    input_image: Image.Image,
+    detect_preview_image: Image.Image,
+    selected_objects: List[Dict[str, Any]],
+    processed_background_data: Optional[str],
+    prepared_inpaint_key: Optional[str],
+    inpaint_preview_image: Image.Image,
+    z_order_text: str,
+    inpaint_debug_gallery: Any,
+    svg_preview_html: str,
+    svg_code_text: str,
+    metadata_text: str,
+    prompt: str,
+    detect_method: str,
+    min_score: float,
+    max_results: int,
+    mx1: float,
+    my1: float,
+    mx2: float,
+    my2: float,
+    mlabel: str,
+    provider: str,
+    model: str,
+    api_key: str,
+    use_z_order: bool,
+    upscale_mode: str,
+    upscale_quality: str,
+    split_text_layers: bool,
+    svg_code_mode: str,
+):
+    snapshot_id = _state_id_from_choice(choice)
+    if not snapshot_id:
+        return "Choose a saved state to overwrite.", gr.update(), gr.update()
+
+    _ensure_state_store()
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    existing_name = "state"
+    for row in _load_state_index():
+        if row.get("id") == snapshot_id:
+            existing_name = row.get("name", existing_name)
+            break
+    final_name = (state_name or "").strip() or existing_name
+    payload = {
+        "schema_version": 1,
+        "id": snapshot_id,
+        "name": final_name,
+        "saved_at": now,
+        "data": _snapshot_data_from_inputs(
+            input_image,
+            detect_preview_image,
+            selected_objects,
+            processed_background_data,
+            prepared_inpaint_key,
+            inpaint_preview_image,
+            z_order_text,
+            inpaint_debug_gallery,
+            svg_preview_html,
+            svg_code_text,
+            metadata_text,
+            prompt,
+            detect_method,
+            min_score,
+            max_results,
+            mx1,
+            my1,
+            mx2,
+            my2,
+            mlabel,
+            provider,
+            model,
+            api_key,
+            use_z_order,
+            upscale_mode,
+            upscale_quality,
+            split_text_layers,
+            svg_code_mode,
+        ),
+    }
+    (STATE_DIR / f"{snapshot_id}.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    index_rows = [row for row in _load_state_index() if row.get("id") != snapshot_id]
+    index_rows.append({"id": snapshot_id, "name": final_name, "saved_at": now})
+    _save_state_index(index_rows)
+
+    choices = _state_choices()
+    selected = next((c for c in choices if c.startswith(snapshot_id + " | ")), choices[0] if choices else None)
+    return (
+        f"Overwrote state: {final_name} ({snapshot_id})",
+        gr.update(choices=choices, value=selected),
+        final_name,
     )
 
 
