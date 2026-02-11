@@ -16,6 +16,7 @@ class Settings:
 
     inpaint_model_default: str = os.getenv("INPAINT_MODEL_DEFAULT", "bytedance-seed/seedream-4.5")
     inpaint_timeout_s: float = float(os.getenv("INPAINT_TIMEOUT", "60"))
+    local_inpaint_max_side: int = int(os.getenv("LOCAL_INPAINT_MAX_SIDE", "2048"))
 
     big_lama_command: str | None = os.getenv("BIG_LAMA_COMMAND")
     qualcomm_lama_dilated_command: str | None = os.getenv("QUALCOMM_LAMA_DILATED_COMMAND")
