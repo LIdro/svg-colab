@@ -329,7 +329,53 @@ class ColabPipeline:
             except Exception:
                 pass
 
+    def _install_groundingdino_editable(self, source_dir: Path) -> Optional[str]:
+        marker = source_dir / ".editable_installed"
+        if marker.exists():
+            return None
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-e", str(source_dir)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            marker.write_text("ok\n", encoding="utf-8")
+            return None
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            stdout = (exc.stdout or "").strip()
+            msg = stderr or stdout or str(exc)
+            return f"pip install -e failed: {msg[:600]}"
+
+    def _patch_transformers_bert_compat(self) -> None:
+        # GroundingDINO's bert warper expects BertModel.get_head_mask.
+        try:
+            from transformers import BertModel
+            from transformers.modeling_utils import ModuleUtilsMixin
+        except Exception:
+            return
+
+        if hasattr(BertModel, "get_head_mask"):
+            return
+
+        def _gdino_get_head_mask(self, head_mask, num_hidden_layers, is_attention_chunked=False):
+            try:
+                return ModuleUtilsMixin.get_head_mask(
+                    self,
+                    head_mask,
+                    num_hidden_layers,
+                    is_attention_chunked=is_attention_chunked,
+                )
+            except Exception:
+                if head_mask is None:
+                    return [None] * int(num_hidden_layers)
+                return head_mask
+
+        setattr(BertModel, "get_head_mask", _gdino_get_head_mask)
+
     def _import_groundingdino_inference(self) -> tuple[Any, Any, Any]:
+        self._patch_transformers_bert_compat()
         try:
             from groundingdino.util.inference import (
                 load_image as _load_image,
@@ -354,8 +400,12 @@ class ColabPipeline:
                 continue
 
         downloaded = self._download_groundingdino_source()
+        install_error = None
+        if downloaded is not None:
+            install_error = self._install_groundingdino_editable(downloaded)
         if downloaded is not None and str(downloaded) not in sys.path:
             sys.path.insert(0, str(downloaded))
+        self._patch_transformers_bert_compat()
         if downloaded is not None:
             try:
                 from groundingdino.util.inference import (
@@ -372,7 +422,8 @@ class ColabPipeline:
             tried.append(str(downloaded))
         raise ImportError(
             "Could not import groundingdino.util.inference. "
-            f"Tried paths: {tried}"
+            f"Tried paths: {tried}. "
+            f"Editable install status: {install_error or 'ok/not-needed'}"
         )
 
     def _groundingdino_custom_ops_available(self) -> bool:
@@ -508,7 +559,18 @@ class ColabPipeline:
                 pre_w = w_dst.exists() and w_dst.stat().st_size > 0
                 self._download_file_if_missing(cfg_url, cfg_dst)
                 self._download_file_if_missing(w_url, w_dst)
-                os.environ["GDINO_CONFIG"] = str(cfg_dst)
+                # Prefer repo-local config path when GroundingDINO source is available,
+                # matching svg-repair/GROUNDING_DINO_SETUP.md.
+                gdino_source = self._download_groundingdino_source()
+                repo_cfg = None
+                if gdino_source is not None:
+                    candidate_cfg = gdino_source / "groundingdino" / "config" / "GroundingDINO_SwinT_OGC.py"
+                    if candidate_cfg.exists():
+                        repo_cfg = candidate_cfg
+                        install_error = self._install_groundingdino_editable(gdino_source)
+                        if install_error and not result.get("error"):
+                            result["error"] = install_error
+                os.environ["GDINO_CONFIG"] = str(repo_cfg or cfg_dst)
                 os.environ["GDINO_WEIGHTS"] = str(w_dst)
                 result["downloaded_config"] = not pre_cfg and cfg_dst.exists()
                 result["downloaded_weights"] = not pre_w and w_dst.exists()
