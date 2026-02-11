@@ -6,7 +6,7 @@ import json
 import os
 import tempfile
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import gradio as gr
 import numpy as np
@@ -399,26 +399,16 @@ def _holed_preview(source: Image.Image, alpha: np.ndarray) -> Image.Image:
 def _build_inpaint_debug_gallery(
     original_image: Image.Image,
     selected_objects: List[Dict[str, Any]],
-    result: Dict[str, Any],
+    ordered_ids: List[str],
+    layers_map: Optional[Dict[str, str]] = None,
 ) -> List[tuple[Image.Image, str]]:
     gallery: List[tuple[Image.Image, str]] = []
     if original_image is None or not selected_objects:
         return gallery
 
     object_map = {obj["id"]: obj for obj in selected_objects}
-    z_order_used = result.get("z_order_used", [])
-    z_ids = [z.get("id") for z in z_order_used if isinstance(z, dict) and z.get("id")]
-    if not z_ids:
-        z_ids = [obj["id"] for obj in selected_objects]
-
-    layers_map: Dict[str, str] = {}
-    for layer in result.get("layers", []):
-        if not isinstance(layer, dict):
-            continue
-        object_id = layer.get("object_id")
-        inpainted = layer.get("inpainted_image")
-        if object_id and inpainted:
-            layers_map[object_id] = inpainted
+    z_ids = ordered_ids or [obj["id"] for obj in selected_objects]
+    layers_map = layers_map or {}
 
     current = original_image.convert("RGBA")
     gallery.append((current, "Step 0: Source image"))
@@ -450,24 +440,14 @@ def _build_inpaint_debug_gallery(
                 gallery.append((inpainted, f"Step {step} output: {label}"))
                 current = inpainted.convert("RGBA")
             except Exception:
-                pass
+                current = hole_img
+        else:
+            current = hole_img
 
     return gallery
 
 
-def process_objects(
-    image: Image.Image,
-    selected_objects: List[Dict[str, Any]],
-    provider: str,
-    model: str,
-    api_key: str,
-    use_z_order: bool,
-):
-    if image is None:
-        return None, None, "Upload an image first.", "", []
-    if not selected_objects:
-        return image, pil_to_data_uri(image), "No selected objects.", "", []
-
+def _objects_payload(selected_objects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     objects_payload = []
     for obj in selected_objects:
         objects_payload.append(
@@ -478,7 +458,52 @@ def process_objects(
                 "mask_data": obj["mask_data"],
             }
         )
+    return objects_payload
 
+
+def _ordered_ids_from_payload(image: Image.Image, objects_payload: List[Dict[str, Any]], use_z_order: bool) -> tuple[List[str], str]:
+    if not use_z_order:
+        z_rows = [
+            {"id": obj["id"], "label": obj["label"], "z_score": 0.0, "rank": i + 1, "reasoning": "user order"}
+            for i, obj in enumerate(objects_payload)
+        ]
+        return [obj["id"] for obj in objects_payload], json.dumps(z_rows, indent=2)
+
+    z_result = api_post(
+        "/compute-z-order",
+        {
+            "image_width": image.width,
+            "image_height": image.height,
+            "objects": objects_payload,
+        },
+    )
+    z_rows = z_result.get("ordered_objects", [])
+    ordered_ids = [z.get("id") for z in z_rows if isinstance(z, dict) and z.get("id")]
+    if not ordered_ids:
+        ordered_ids = [obj["id"] for obj in objects_payload]
+    return ordered_ids, json.dumps(z_rows, indent=2)
+
+
+def prepare_inpaint(
+    image: Image.Image,
+    selected_objects: List[Dict[str, Any]],
+    provider: str,
+    model: str,
+    api_key: str,
+    use_z_order: bool,
+):
+    if image is None:
+        return None, None, "Upload an image first.", "", [], None
+    if not selected_objects:
+        return None, None, "No selected objects.", "", [], None
+
+    objects_payload = _objects_payload(selected_objects)
+    try:
+        ordered_ids, z_json = _ordered_ids_from_payload(image, objects_payload, use_z_order)
+    except requests.RequestException as exc:
+        return None, None, f"Prepare failed: {_api_error_text(exc)}", "", [], None
+
+    debug_gallery = _build_inpaint_debug_gallery(image, selected_objects, ordered_ids, None)
     payload = {
         "image_data": pil_to_data_uri(image),
         "objects": objects_payload,
@@ -487,14 +512,45 @@ def process_objects(
         "api_key": api_key or None,
         "use_z_order": use_z_order,
     }
+    prepared_state = {
+        "payload": payload,
+        "ordered_ids": ordered_ids,
+        "selected_objects": selected_objects,
+        "original_image_data": pil_to_data_uri(image),
+    }
+    return None, None, "Inputs prepared. Review Z-order/debug frames, then click Run Inpaint.", z_json, debug_gallery, prepared_state
 
+
+def run_inpaint(prepared_state: Optional[Dict[str, Any]]):
+    if not prepared_state or not prepared_state.get("payload"):
+        return None, None, "Prepare inputs first, then click Run Inpaint.", "", []
     try:
-        result = api_post("/inpaint-sequential", payload)
+        result = api_post("/inpaint-sequential", prepared_state["payload"])
     except requests.RequestException as exc:
-        return image, None, f"Process failed: {_api_error_text(exc)}", "", []
+        return None, None, f"Process failed: {_api_error_text(exc)}", "", []
+
     bg_data = result["final_background"]
     bg_image = data_uri_to_pil(bg_data)
-    debug_gallery = _build_inpaint_debug_gallery(image, selected_objects, result)
+    layers_map: Dict[str, str] = {}
+    for layer in result.get("layers", []):
+        if not isinstance(layer, dict):
+            continue
+        object_id = layer.get("object_id")
+        inpainted = layer.get("inpainted_image")
+        if object_id and inpainted:
+            layers_map[object_id] = inpainted
+
+    try:
+        original_image = data_uri_to_pil(prepared_state.get("original_image_data", ""))
+    except Exception:
+        original_image = bg_image
+
+    debug_gallery = _build_inpaint_debug_gallery(
+        original_image=original_image,
+        selected_objects=prepared_state.get("selected_objects", []),
+        ordered_ids=prepared_state.get("ordered_ids", []),
+        layers_map=layers_map,
+    )
     status = f"Processed {len(result.get('layers', []))} object(s) in {result.get('total_processing_time', 0):.2f}s"
     return bg_image, bg_data, status, json.dumps(result.get("z_order_used", []), indent=2), debug_gallery
 
@@ -579,7 +635,7 @@ def trace_and_assemble(
 
 
 def clear_all():
-    return None, None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", None, "", None, []
+    return None, None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", None, "", None, [], None
 
 
 with gr.Blocks(title="SVG Repair Colab Demo") as demo:
@@ -587,6 +643,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
 
     selected_objects_state = gr.State([])
     processed_background_state = gr.State(None)
+    prepared_inpaint_state = gr.State(None)
 
     with gr.Row():
         input_image = gr.Image(type="pil", label="Original")
@@ -639,7 +696,8 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
             clear_selected_button = gr.Button("Clear Selected Objects")
 
     with gr.Row():
-        process_button = gr.Button("Process Objects")
+        prepare_inpaint_button = gr.Button("Prepare Inpaint Inputs")
+        run_inpaint_button = gr.Button("Run Inpaint")
         clear_button = gr.Button("Clear")
 
     inpaint_preview_image = gr.Image(type="pil", label="Inpaint Preview (Processed Background)")
@@ -700,9 +758,15 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
         outputs=[detect_preview_image, selected_objects_state, objects_table, object_selector, status_text],
     )
 
-    process_button.click(
-        fn=process_objects,
+    prepare_inpaint_button.click(
+        fn=prepare_inpaint,
         inputs=[input_image, selected_objects_state, provider, model, api_key, use_z_order],
+        outputs=[inpaint_preview_image, processed_background_state, status_text, z_order_box, inpaint_debug_gallery, prepared_inpaint_state],
+    )
+
+    run_inpaint_button.click(
+        fn=run_inpaint,
+        inputs=[prepared_inpaint_state],
         outputs=[inpaint_preview_image, processed_background_state, status_text, z_order_box, inpaint_debug_gallery],
     )
 
@@ -729,6 +793,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
             metadata,
             processed_background_state,
             inpaint_debug_gallery,
+            prepared_inpaint_state,
         ],
     )
 
