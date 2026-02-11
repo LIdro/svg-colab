@@ -1200,6 +1200,10 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
             copy_svg_status,
             status_text,
         ],
+    ).then(
+        fn=toggle_svg_code_visibility,
+        inputs=[svg_code_mode],
+        outputs=[svg_code],
     )
 
     clear_button.click(
@@ -1225,6 +1229,10 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
             saved_states_dropdown,
             state_name_input,
         ],
+    ).then(
+        fn=toggle_svg_code_visibility,
+        inputs=[svg_code_mode],
+        outputs=[svg_code],
     )
 
 
