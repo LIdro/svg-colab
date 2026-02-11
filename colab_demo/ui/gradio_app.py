@@ -635,7 +635,7 @@ def trace_and_assemble(
 
 
 def clear_all():
-    return None, None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", None, "", None, [], None
+    return None, None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", "", None, "", None, [], None
 
 
 with gr.Blocks(title="SVG Repair Colab Demo") as demo:
