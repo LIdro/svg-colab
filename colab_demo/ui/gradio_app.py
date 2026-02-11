@@ -365,6 +365,96 @@ def _upscale_data_uri(image_data: str, mode: str) -> str:
         return image_data
 
 
+def _dilate_mask_data_uri(mask_data: str, pixels: int) -> str:
+    if pixels <= 0:
+        return mask_data
+    mask = data_uri_to_pil(mask_data)
+    alpha = np.array(mask.getchannel("A"))
+    binary = (alpha > 0).astype(np.uint8) * 255
+    m = Image.fromarray(binary, mode="L")
+    m = m.filter(ImageFilter.MaxFilter(size=2 * pixels + 1))
+    rgba = np.zeros((m.height, m.width, 4), dtype=np.uint8)
+    rgba[:, :, 3] = np.array(m)
+    return pil_to_data_uri(Image.fromarray(rgba, mode="RGBA"))
+
+
+def _mask_alpha(mask_data: str, size: tuple[int, int]) -> np.ndarray:
+    mask = data_uri_to_pil(mask_data)
+    if mask.size != size:
+        mask = mask.resize(size, Image.Resampling.LANCZOS)
+    return np.array(mask.getchannel("A"), dtype=np.uint8)
+
+
+def _holed_preview(source: Image.Image, alpha: np.ndarray) -> Image.Image:
+    arr = np.array(source.convert("RGBA"))
+    hole = arr.copy()
+    region = alpha > 0
+    hole[region, 0] = 255
+    hole[region, 1] = 255
+    hole[region, 2] = 255
+    hole[region, 3] = 255
+    return Image.fromarray(hole, mode="RGBA")
+
+
+def _build_inpaint_debug_gallery(
+    original_image: Image.Image,
+    selected_objects: List[Dict[str, Any]],
+    result: Dict[str, Any],
+) -> List[tuple[Image.Image, str]]:
+    gallery: List[tuple[Image.Image, str]] = []
+    if original_image is None or not selected_objects:
+        return gallery
+
+    object_map = {obj["id"]: obj for obj in selected_objects}
+    z_order_used = result.get("z_order_used", [])
+    z_ids = [z.get("id") for z in z_order_used if isinstance(z, dict) and z.get("id")]
+    if not z_ids:
+        z_ids = [obj["id"] for obj in selected_objects]
+
+    layers_map: Dict[str, str] = {}
+    for layer in result.get("layers", []):
+        if not isinstance(layer, dict):
+            continue
+        object_id = layer.get("object_id")
+        inpainted = layer.get("inpainted_image")
+        if object_id and inpainted:
+            layers_map[object_id] = inpainted
+
+    current = original_image.convert("RGBA")
+    gallery.append((current, "Step 0: Source image"))
+
+    for step, object_id in enumerate(z_ids, start=1):
+        obj = object_map.get(object_id)
+        if not obj or not obj.get("mask_data"):
+            continue
+
+        label = obj.get("label", object_id)
+        mask_data = obj["mask_data"]
+        if _is_text_like_label(label):
+            mask_data = _dilate_mask_data_uri(mask_data, 6)
+
+        alpha = _mask_alpha(mask_data, current.size)
+        mask_rgba = np.zeros((current.height, current.width, 4), dtype=np.uint8)
+        mask_rgba[:, :, 3] = alpha
+        mask_img = Image.fromarray(mask_rgba, mode="RGBA")
+        hole_img = _holed_preview(current, alpha)
+
+        gallery.append((current.copy(), f"Step {step} input: {label}"))
+        gallery.append((mask_img, f"Step {step} mask: {label}"))
+        gallery.append((hole_img, f"Step {step} holed preview: {label}"))
+
+        inpainted_data = layers_map.get(object_id)
+        if inpainted_data:
+            try:
+                inpainted = data_uri_to_pil(inpainted_data)
+                gallery.append((inpainted, f"Step {step} output: {label}"))
+                current = inpainted.convert("RGBA")
+            except Exception:
+                pass
+
+    return gallery
+
+
 def process_objects(
     image: Image.Image,
     selected_objects: List[Dict[str, Any]],
@@ -374,9 +464,9 @@ def process_objects(
     use_z_order: bool,
 ):
     if image is None:
-        return None, None, "Upload an image first.", ""
+        return None, None, "Upload an image first.", "", []
     if not selected_objects:
-        return image, pil_to_data_uri(image), "No selected objects.", ""
+        return image, pil_to_data_uri(image), "No selected objects.", "", []
 
     objects_payload = []
     for obj in selected_objects:
@@ -401,11 +491,12 @@ def process_objects(
     try:
         result = api_post("/inpaint-sequential", payload)
     except requests.RequestException as exc:
-        return image, None, f"Process failed: {_api_error_text(exc)}", ""
+        return image, None, f"Process failed: {_api_error_text(exc)}", "", []
     bg_data = result["final_background"]
     bg_image = data_uri_to_pil(bg_data)
+    debug_gallery = _build_inpaint_debug_gallery(image, selected_objects, result)
     status = f"Processed {len(result.get('layers', []))} object(s) in {result.get('total_processing_time', 0):.2f}s"
-    return bg_image, bg_data, status, json.dumps(result.get("z_order_used", []), indent=2)
+    return bg_image, bg_data, status, json.dumps(result.get("z_order_used", []), indent=2), debug_gallery
 
 
 def trace_and_assemble(
@@ -488,7 +579,7 @@ def trace_and_assemble(
 
 
 def clear_all():
-    return None, None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", None, "", None
+    return None, None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", None, "", None, []
 
 
 with gr.Blocks(title="SVG Repair Colab Demo") as demo:
@@ -553,6 +644,13 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
 
     inpaint_preview_image = gr.Image(type="pil", label="Inpaint Preview (Processed Background)")
     z_order_box = gr.Code(label="Z-Order Used", language="json")
+    inpaint_debug_gallery = gr.Gallery(
+        label="Inpaint Debug: Input / Mask / Holed Preview / Output",
+        columns=4,
+        rows=2,
+        height="auto",
+        object_fit="contain",
+    )
 
     with gr.Row():
         trace_button = gr.Button("Trace + Assemble SVG")
@@ -605,7 +703,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
     process_button.click(
         fn=process_objects,
         inputs=[input_image, selected_objects_state, provider, model, api_key, use_z_order],
-        outputs=[inpaint_preview_image, processed_background_state, status_text, z_order_box],
+        outputs=[inpaint_preview_image, processed_background_state, status_text, z_order_box, inpaint_debug_gallery],
     )
 
     trace_button.click(
@@ -630,6 +728,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
             download_svg,
             metadata,
             processed_background_state,
+            inpaint_debug_gallery,
         ],
     )
 
