@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw, ImageFilter
 
 API_BASE = os.getenv("COLAB_API_BASE", "http://127.0.0.1:5700")
 VISION_SOC_URL = os.getenv("VISION_SOC_URL", "http://127.0.0.1:5050")
+_PREPARED_INPAINT_CACHE: Dict[str, Dict[str, Any]] = {}
 
 try:
     import cv2
@@ -512,16 +513,20 @@ def prepare_inpaint(
         "api_key": api_key or None,
         "use_z_order": use_z_order,
     }
-    prepared_state = {
+    cache_key = str(uuid.uuid4())
+    _PREPARED_INPAINT_CACHE[cache_key] = {
         "payload": payload,
         "ordered_ids": ordered_ids,
         "selected_objects": selected_objects,
         "original_image_data": pil_to_data_uri(image),
     }
-    return None, None, "Inputs prepared. Review Z-order/debug frames, then click Run Inpaint.", z_json, debug_gallery, prepared_state
+    return None, None, "Inputs prepared. Review Z-order/debug frames, then click Run Inpaint.", z_json, debug_gallery, cache_key
 
 
-def run_inpaint(prepared_state: Optional[Dict[str, Any]]):
+def run_inpaint(prepared_state_key: Optional[str]):
+    if not prepared_state_key:
+        return None, None, "Prepare inputs first, then click Run Inpaint.", "", []
+    prepared_state = _PREPARED_INPAINT_CACHE.get(prepared_state_key)
     if not prepared_state or not prepared_state.get("payload"):
         return None, None, "Prepare inputs first, then click Run Inpaint.", "", []
     try:
