@@ -38,6 +38,119 @@ def data_uri_to_pil(data_uri: str) -> Image.Image:
     return Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGBA")
 
 
+def _image_to_data_uri(image: Any) -> Optional[str]:
+    if image is None:
+        return None
+    if isinstance(image, str):
+        if image.startswith("data:image/"):
+            return image
+        if os.path.exists(image):
+            try:
+                return pil_to_data_uri(Image.open(image).convert("RGBA"))
+            except Exception:
+                return None
+        return None
+    if isinstance(image, Image.Image):
+        return pil_to_data_uri(image.convert("RGBA"))
+    if isinstance(image, np.ndarray):
+        try:
+            return pil_to_data_uri(Image.fromarray(image).convert("RGBA"))
+        except Exception:
+            return None
+    return None
+
+
+def _data_uri_to_image(value: Optional[str]) -> Optional[Image.Image]:
+    if not value:
+        return None
+    try:
+        return data_uri_to_pil(value)
+    except Exception:
+        return None
+
+
+def _gallery_to_serializable(gallery: Any) -> List[Dict[str, str]]:
+    if not isinstance(gallery, list):
+        return []
+    out: List[Dict[str, str]] = []
+    for item in gallery:
+        caption = ""
+        image_part = None
+        if isinstance(item, (tuple, list)) and item:
+            image_part = item[0]
+            if len(item) > 1 and isinstance(item[1], str):
+                caption = item[1]
+        elif isinstance(item, dict):
+            image_part = item.get("image") or item.get("value")
+            if isinstance(item.get("caption"), str):
+                caption = item["caption"]
+        else:
+            image_part = item
+        image_data = _image_to_data_uri(image_part)
+        if image_data:
+            out.append({"image_data": image_data, "caption": caption})
+    return out
+
+
+def _gallery_from_serialized(items: Any) -> List[tuple[Image.Image, str]]:
+    if not isinstance(items, list):
+        return []
+    out: List[tuple[Image.Image, str]] = []
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        image = _data_uri_to_image(row.get("image_data"))
+        if image is None:
+            continue
+        out.append((image, str(row.get("caption", ""))))
+    return out
+
+
+def _ensure_state_store() -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    if not STATE_INDEX.exists():
+        STATE_INDEX.write_text("[]", encoding="utf-8")
+
+
+def _load_state_index() -> List[Dict[str, Any]]:
+    _ensure_state_store()
+    try:
+        data = json.loads(STATE_INDEX.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_state_index(rows: List[Dict[str, Any]]) -> None:
+    _ensure_state_store()
+    STATE_INDEX.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+
+
+def _state_choices() -> List[str]:
+    rows = _load_state_index()
+    choices = []
+    for row in sorted(rows, key=lambda r: r.get("saved_at", ""), reverse=True):
+        sid = row.get("id", "")
+        name = row.get("name", "state")
+        ts = row.get("saved_at", "")
+        choices.append(f"{sid} | {name} | {ts}")
+    return choices
+
+
+def _state_id_from_choice(choice: str) -> str:
+    if not choice:
+        return ""
+    return choice.split(" | ", 1)[0].strip()
+
+
+def _svg_to_temp_file(svg_text: str) -> Optional[str]:
+    if not svg_text:
+        return None
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".svg") as f:
+        f.write(svg_text.encode("utf-8"))
+        return f.name
+
+
 def _api_error_text(exc: requests.RequestException) -> str:
     msg = str(exc)
     if isinstance(exc, requests.ConnectionError) or "Connection refused" in msg or "Failed to establish a new connection" in msg:
