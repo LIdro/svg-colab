@@ -6,6 +6,8 @@ import json
 import os
 import tempfile
 import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import gradio as gr
@@ -16,6 +18,8 @@ from PIL import Image, ImageDraw, ImageFilter
 API_BASE = os.getenv("COLAB_API_BASE", "http://127.0.0.1:5700")
 VISION_SOC_URL = os.getenv("VISION_SOC_URL", "http://127.0.0.1:5050")
 _PREPARED_INPAINT_CACHE: Dict[str, Dict[str, Any]] = {}
+STATE_DIR = Path(os.getenv("COLAB_STATE_DIR", ".dev_state"))
+STATE_INDEX = STATE_DIR / "states_index.json"
 
 try:
     import cv2
