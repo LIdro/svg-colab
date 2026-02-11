@@ -605,6 +605,34 @@ class ColabPipeline:
             out = open(output_path, "rb").read()
         return "data:image/png;base64," + base64.b64encode(out).decode("ascii")
 
+    def _resize_for_local_inpaint(self, image_bytes: bytes, mask_bytes: bytes) -> tuple[bytes, bytes, tuple[int, int], tuple[int, int]]:
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+        mask = Image.open(io.BytesIO(mask_bytes)).convert("L")
+        orig_size = image.size
+        w, h = orig_size
+        max_side = max(w, h)
+        limit = max(256, int(settings.local_inpaint_max_side))
+        if max_side <= limit:
+            return image_bytes, mask_bytes, orig_size, orig_size
+
+        scale = float(limit) / float(max_side)
+        new_size = (max(1, int(round(w * scale))), max(1, int(round(h * scale))))
+        image_small = image.resize(new_size, Image.Resampling.LANCZOS)
+        mask_small = mask.resize(new_size, Image.Resampling.NEAREST)
+
+        img_buf = io.BytesIO()
+        image_small.save(img_buf, format="PNG")
+        mask_buf = io.BytesIO()
+        mask_small.save(mask_buf, format="PNG")
+        return img_buf.getvalue(), mask_buf.getvalue(), orig_size, new_size
+
+    def _resize_local_inpaint_output_back(self, inpainted_data_uri: str, output_size: tuple[int, int], target_size: tuple[int, int]) -> str:
+        if output_size == target_size:
+            return inpainted_data_uri
+        image = self._decode_image(inpainted_data_uri)
+        image = image.resize(target_size, Image.Resampling.LANCZOS)
+        return self._encode_png(image)
+
     def _inpaint(self, image_data: str, mask_data: str, provider: Optional[str], model: Optional[str], api_key: Optional[str], prompt: str = "") -> Dict[str, Any]:
         provider_name, model_name = self._normalize_inpaint_provider(provider, model)
         if provider_name == "openrouter":
@@ -664,14 +692,18 @@ class ColabPipeline:
 
         if provider_name == "big-lama":
             try:
-                image_out = self._run_inpaint_command(settings.big_lama_command, image_bytes, mask_bytes)
+                img_run, mask_run, orig_size, run_size = self._resize_for_local_inpaint(image_bytes, mask_bytes)
+                image_out = self._run_inpaint_command(settings.big_lama_command, img_run, mask_run)
+                image_out = self._resize_local_inpaint_output_back(image_out, run_size, orig_size)
                 return {"success": True, "inpainted_image": image_out}
             except Exception as exc:
                 return {"success": False, "error": str(exc)}
 
         if provider_name == "qualcomm-lama-dilated":
             try:
-                image_out = self._run_inpaint_command(settings.qualcomm_lama_dilated_command, image_bytes, mask_bytes)
+                img_run, mask_run, orig_size, run_size = self._resize_for_local_inpaint(image_bytes, mask_bytes)
+                image_out = self._run_inpaint_command(settings.qualcomm_lama_dilated_command, img_run, mask_run)
+                image_out = self._resize_local_inpaint_output_back(image_out, run_size, orig_size)
                 return {"success": True, "inpainted_image": image_out}
             except Exception as exc:
                 return {"success": False, "error": str(exc)}
