@@ -9,7 +9,11 @@ opencv-python-headless
 scikit-image
 ultralytics>=8.3.0
 git+https://github.com/ultralytics/CLIP.git
-git+https://github.com/IDEA-Research/GroundingDINO.git
+transformers
+timm
+addict
+yapf
+supervision>=0.22.0
 vtracer
 pypotrace
 gradio
