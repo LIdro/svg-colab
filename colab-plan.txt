@@ -239,9 +239,9 @@ Pass criteria:
 
 Step 5: Connect prompt detection flow
 Actions:
-- ⬜ Wire prompt submit (Enter and button) to /detect.
+- ✅ Wire prompt submit (Enter and button) to /detect.
 - ✅ Wire prompt detect button to /detect.
-- ⬜ Overlay returned masks on left panel.
+- ✅ Overlay returned masks on left panel.
 - ✅ Overlay returned boxes on left panel.
 - ✅ Append detections to a persistent selected object list.
 Checkpoint:
@@ -264,7 +264,7 @@ Actions:
 - ✅ Build object payload (id, label, bbox xyxy, mask_data).
 - ✅ Call /inpaint-sequential with use_z_order true.
 - ✅ Set right panel image to final_background.
-- ⬜ Retain step images for debug (optional accordion).
+- ✅ Retain step images for debug (optional accordion).
 Checkpoint:
 - ⬜ Run with 2+ objects.
 Pass criteria:
