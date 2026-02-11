@@ -635,13 +635,21 @@ def trace_and_assemble(
         svg_file = f.name
 
     metadata = f"Layers: {len(assembled_layers)} | Paths: {total_paths}"
-    preview_html = f'<div style="border:1px solid #ccc; background:white; min-height:300px">{svg_text}</div>'
+    preview_html = (
+        "<div style=\"border:1px solid #ccc; background:white; height:300px; overflow:auto;\">"
+        f"{svg_text}"
+        "</div>"
+    )
     return preview_html, svg_text, svg_file, metadata
 
 
 def clear_all():
     _PREPARED_INPAINT_CACHE.clear()
-    return None, None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", "", None, "", None, [], None
+    return None, None, None, [], [], manager_dropdown_update([]), "Cleared.", "", "", "", None, "", None, [], None, "Hide", "SVG code copy status."
+
+
+def toggle_svg_code_visibility(mode: str):
+    return gr.update(visible=(mode == "Show"))
 
 
 with gr.Blocks(title="SVG Repair Colab Demo") as demo:
@@ -652,8 +660,8 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
     prepared_inpaint_state = gr.State(None)
 
     with gr.Row():
-        input_image = gr.Image(type="pil", label="Original")
-        detect_preview_image = gr.Image(type="pil", label="Detection Preview (Overlay)")
+        input_image = gr.Image(type="pil", label="Original", height=300)
+        detect_preview_image = gr.Image(type="pil", label="Detection Preview (Overlay)", height=300)
 
     status_text = gr.Textbox(label="Status", interactive=False)
 
@@ -706,7 +714,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
         run_inpaint_button = gr.Button("Run Inpaint")
         clear_button = gr.Button("Clear")
 
-    inpaint_preview_image = gr.Image(type="pil", label="Inpaint Preview (Processed Background)")
+    inpaint_preview_image = gr.Image(type="pil", label="Inpaint Preview (Processed Background)", height=300)
     z_order_box = gr.Code(label="Z-Order Used", language="json")
     inpaint_debug_gallery = gr.Gallery(
         label="Inpaint Debug: Input / Mask / Holed Preview / Output",
@@ -719,8 +727,11 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
     with gr.Row():
         trace_button = gr.Button("Trace + Assemble SVG")
     svg_preview = gr.HTML(label="SVG Preview")
-    svg_code = gr.Code(label="SVG Code", language="xml")
     metadata = gr.Textbox(label="Metadata", interactive=False)
+    copy_svg_button = gr.Button("Copy SVG Code")
+    copy_svg_status = gr.Textbox(label="Copy Status", interactive=False, value="SVG code copy status.")
+    svg_code_mode = gr.Dropdown(["Hide", "Show"], value="Hide", label="SVG Code Display")
+    svg_code = gr.Code(label="SVG Code", language="xml", visible=False)
     download_svg = gr.File(label="Download SVG")
 
     input_image.change(
@@ -782,6 +793,19 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
         outputs=[svg_preview, svg_code, download_svg, metadata],
     )
 
+    svg_code_mode.change(
+        fn=toggle_svg_code_visibility,
+        inputs=[svg_code_mode],
+        outputs=[svg_code],
+    )
+
+    copy_svg_button.click(
+        fn=None,
+        inputs=[svg_code],
+        outputs=[copy_svg_status],
+        js="(svgText) => { if (!svgText) return 'No SVG code to copy.'; navigator.clipboard.writeText(svgText); return 'SVG code copied to clipboard.'; }",
+    )
+
     clear_button.click(
         fn=clear_all,
         outputs=[
@@ -800,6 +824,8 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
             processed_background_state,
             inpaint_debug_gallery,
             prepared_inpaint_state,
+            svg_code_mode,
+            copy_svg_status,
         ],
     )
 
