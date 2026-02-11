@@ -1228,7 +1228,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
     copy_svg_button = gr.Button("Copy SVG Code")
     copy_svg_status = gr.Textbox(label="Copy Status", interactive=False, value="SVG code copy status.")
     svg_code_mode = gr.Dropdown(["Hide", "Show"], value="Hide", label="SVG Code Display")
-    svg_code = gr.Code(label="SVG Code", language="xml", visible=False)
+    svg_code = gr.Code(label="SVG Code", language="html", visible=False)
     download_svg = gr.File(label="Download SVG")
 
     input_image.change(
