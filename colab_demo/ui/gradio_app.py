@@ -1369,6 +1369,7 @@ def clear_all():
         dropdown_update,
         table_rows,
         "",
+        "",
     )
 
 
@@ -1653,12 +1654,6 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
         fn=delete_selected_state,
         inputs=[saved_states_dropdown, state_id_input],
         outputs=[status_text, saved_states_dropdown, saved_states_table, state_name_input, state_id_input],
-    )
-
-    saved_states_table.select(
-        fn=select_saved_state_from_table,
-        inputs=[saved_states_table],
-        outputs=[saved_states_dropdown, status_text],
     )
 
     load_state_button.click(
