@@ -132,14 +132,39 @@ def _save_state_index(rows: List[Dict[str, Any]]) -> None:
 
 
 def _state_choices() -> List[str]:
-    rows = _load_state_index()
+    rows = _state_rows_sorted()
     choices = []
-    for row in sorted(rows, key=lambda r: r.get("saved_at", ""), reverse=True):
+    for row in rows:
         sid = row.get("id", "")
         name = row.get("name", "state")
         ts = row.get("saved_at", "")
         choices.append(f"{sid} | {name} | {ts}")
     return choices
+
+
+def _state_rows_sorted() -> List[Dict[str, Any]]:
+    rows = _load_state_index()
+    return sorted(rows, key=lambda r: r.get("saved_at", ""), reverse=True)
+
+
+def _state_table_rows() -> List[List[str]]:
+    rows = _state_rows_sorted()
+    return [[str(row.get("id", "")), str(row.get("name", "state")), str(row.get("saved_at", ""))] for row in rows]
+
+
+def _saved_state_updates(preferred_id: Optional[str] = None):
+    rows = _state_rows_sorted()
+    choices = []
+    selected = None
+    for row in rows:
+        sid = str(row.get("id", ""))
+        choice = f"{sid} | {row.get('name', 'state')} | {row.get('saved_at', '')}"
+        choices.append(choice)
+        if preferred_id and sid == preferred_id:
+            selected = choice
+    if selected is None:
+        selected = choices[0] if choices else None
+    return gr.update(choices=choices, value=selected), _state_table_rows(), len(rows)
 
 
 def _legacy_state_dirs() -> List[Path]:
