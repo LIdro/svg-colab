@@ -1058,7 +1058,8 @@ def trace_and_assemble(
     split_text_layers: bool,
 ):
     if image is None:
-        return "", "", None, "Upload an image first."
+        empty_state = {"width": 0, "height": 0, "layers": []}
+        return "", "", None, "Upload an image first.", gr.update(choices=[], value=[]), empty_state
 
     original_data = pil_to_data_uri(image)
     background_data = processed_background_data or original_data
@@ -1090,7 +1091,8 @@ def trace_and_assemble(
     try:
         traced = api_post("/trace-batch", {"layers": layers, "options": {"color_mode": "color", "mode": "spline"}})
     except requests.RequestException as exc:
-        return "", "", None, f"Trace failed: {_api_error_text(exc)}"
+        empty_state = {"width": 0, "height": 0, "layers": []}
+        return "", "", None, f"Trace failed: {_api_error_text(exc)}", gr.update(choices=[], value=[]), empty_state
 
     assembled_layers = []
     total_paths = 0
@@ -1122,7 +1124,8 @@ def trace_and_assemble(
     try:
         assembled = api_post("/assemble", {"width": w, "height": h, "layers": assembled_layers, "optimize": False})
     except requests.RequestException as exc:
-        return "", "", None, f"Assemble failed: {_api_error_text(exc)}"
+        empty_state = {"width": 0, "height": 0, "layers": []}
+        return "", "", None, f"Assemble failed: {_api_error_text(exc)}", gr.update(choices=[], value=[]), empty_state
     svg_text = assembled["svgText"]
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".svg") as f:
@@ -1135,43 +1138,69 @@ def trace_and_assemble(
         metadata_lines.append(f"- {display_label} [{row['id']}]: {row['path_count']}")
     metadata = "\n".join(metadata_lines)
 
-    preview_uid = str(uuid.uuid4())[:8]
-    layer_controls = []
-    preview_groups = []
-    for row in layer_path_rows:
-        safe_id_attr = re.sub(r"[^A-Za-z0-9_-]", "_", str(row["id"]))
-        safe_label = html.escape(str(row["label"] or row["id"]))
-        layer_controls.append(
-            f"<label style='display:block; margin:4px 0;'>"
-            f"<input type='checkbox' checked onchange=\"toggleLayer_{preview_uid}('{safe_id_attr}', this.checked)\"> "
-            f"{safe_label} ({row['path_count']} paths)</label>"
-        )
-        preview_groups.append(f"<g data-layer-id=\"{safe_id_attr}\">{row['svg_paths']}</g>")
+    choices = [_layer_choice(row) for row in layer_path_rows]
+    trace_state = {"width": w, "height": h, "layers": layer_path_rows}
+    preview_html = _render_svg_preview(trace_state, choices)
+    return preview_html, svg_text, svg_file, metadata, gr.update(choices=choices, value=choices), trace_state
 
-    w, h = image.size
+
+def _layer_choice(row: Dict[str, Any]) -> str:
+    label = row.get("label") or row.get("id", "layer")
+    return f"{row.get('id', '')} | {label} ({int(row.get('path_count', 0))} paths)"
+
+
+def _layer_id_from_choice(choice: str) -> str:
+    if not choice:
+        return ""
+    return choice.split(" | ", 1)[0].strip()
+
+
+def _render_svg_preview(trace_state: Dict[str, Any], selected_choices: List[str]) -> str:
+    if not isinstance(trace_state, dict):
+        return ""
+    width = int(trace_state.get("width") or 0)
+    height = int(trace_state.get("height") or 0)
+    layers = trace_state.get("layers") or []
+    if width <= 0 or height <= 0 or not layers:
+        return ""
+
+    visible_ids = {_layer_id_from_choice(choice) for choice in (selected_choices or [])}
+    groups = []
+    for row in layers:
+        layer_id = str(row.get("id", ""))
+        if layer_id not in visible_ids:
+            continue
+        groups.append(str(row.get("svg_paths", "")))
+
     preview_svg = (
-        f"<svg id='svg-root-{preview_uid}' xmlns='http://www.w3.org/2000/svg' "
-        f"viewBox='0 0 {w} {h}' width='100%' height='100%' preserveAspectRatio='xMidYMid meet'>"
-        + "".join(preview_groups)
+        f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {width} {height}' "
+        f"width='100%' height='100%' preserveAspectRatio='xMidYMid meet'>"
+        + "".join(groups)
         + "</svg>"
     )
-    preview_html = (
+    return (
         "<div style='border:1px solid #ccc; background:#fff; padding:8px;'>"
         f"<div style='height:300px; overflow:hidden; border:1px solid #ddd;'>{preview_svg}</div>"
-        "<div style='margin-top:8px; max-height:140px; overflow:auto; border-top:1px solid #eee; padding-top:6px;'>"
-        + "".join(layer_controls)
-        + "</div>"
         "</div>"
-        f"<script>"
-        f"function toggleLayer_{preview_uid}(layerId, visible){{"
-        f"  const root=document.getElementById('svg-root-{preview_uid}');"
-        f"  if(!root) return;"
-        f"  const group=root.querySelector('[data-layer-id=\"'+layerId+'\"]');"
-        f"  if(group) group.style.display=visible ? '' : 'none';"
-        f"}}"
-        f"</script>"
     )
-    return preview_html, svg_text, svg_file, metadata
+
+
+def update_svg_preview_layers(layer_visibility: List[str], trace_preview_state: Dict[str, Any]) -> str:
+    return _render_svg_preview(trace_preview_state, layer_visibility or [])
+
+
+def show_all_layers(trace_preview_state: Dict[str, Any]):
+    layers = trace_preview_state.get("layers") if isinstance(trace_preview_state, dict) else []
+    choices = [_layer_choice(row) for row in layers]
+    return gr.update(value=choices), _render_svg_preview(trace_preview_state, choices)
+
+
+def hide_all_layers(trace_preview_state: Dict[str, Any]):
+    return gr.update(value=[]), _render_svg_preview(trace_preview_state, [])
+
+
+def reset_layer_controls():
+    return gr.update(choices=[], value=[]), {"width": 0, "height": 0, "layers": []}, ""
 
 
 def clear_all():
