@@ -199,17 +199,22 @@ def _safe_state_row_from_file(path: Path) -> Optional[Dict[str, Any]]:
 def _rebuild_state_index_from_files() -> None:
     rows_by_id: Dict[str, Dict[str, Any]] = {}
 
-    for row in _load_state_index():
-        if not isinstance(row, dict):
-            continue
-        sid = str(row.get("id") or "").strip()
-        if not sid:
-            continue
-        rows_by_id[sid] = {
-            "id": sid,
-            "name": str(row.get("name") or f"state-{sid}"),
-            "saved_at": str(row.get("saved_at") or ""),
-        }
+    try:
+        existing = json.loads(STATE_INDEX.read_text(encoding="utf-8"))
+    except Exception:
+        existing = []
+    if isinstance(existing, list):
+        for row in existing:
+            if not isinstance(row, dict):
+                continue
+            sid = str(row.get("id") or "").strip()
+            if not sid:
+                continue
+            rows_by_id[sid] = {
+                "id": sid,
+                "name": str(row.get("name") or f"state-{sid}"),
+                "saved_at": str(row.get("saved_at") or ""),
+            }
 
     for path in STATE_DIR.glob("*.json"):
         if path.name == "states_index.json":
@@ -784,9 +789,10 @@ def run_inpaint(prepared_state_key: Optional[str]):
 
 
 def refresh_saved_states():
+    _ensure_state_store()
     choices = _state_choices()
     value = choices[0] if choices else None
-    return gr.update(choices=choices, value=value), "Saved states list refreshed."
+    return gr.update(choices=choices, value=value), f"Saved states list refreshed ({len(choices)} found)."
 
 
 def _snapshot_data_from_inputs(
