@@ -831,9 +831,27 @@ def run_inpaint(prepared_state_key: Optional[str]):
 
 def refresh_saved_states():
     _ensure_state_store()
-    choices = _state_choices()
-    value = choices[0] if choices else None
-    return gr.update(choices=choices, value=value), f"Saved states list refreshed ({len(choices)} found in {STATE_DIR})."
+    dropdown_update, table_rows, count = _saved_state_updates()
+    return dropdown_update, table_rows, f"Saved states list refreshed ({count} found in {STATE_DIR})."
+
+
+def select_saved_state_from_table(table_rows: Any, evt: Any):
+    if not isinstance(table_rows, list):
+        return gr.update(), "No saved state row selected."
+    idx = getattr(evt, "index", None)
+    row_index = idx[0] if isinstance(idx, (tuple, list)) else idx
+    if not isinstance(row_index, int) or row_index < 0 or row_index >= len(table_rows):
+        return gr.update(), "No saved state row selected."
+    row = table_rows[row_index]
+    if not isinstance(row, (tuple, list)) or len(row) < 3:
+        return gr.update(), "No saved state row selected."
+    snapshot_id = str(row[0] or "").strip()
+    name = str(row[1] or "state")
+    saved_at = str(row[2] or "")
+    if not snapshot_id:
+        return gr.update(), "No saved state row selected."
+    choice = f"{snapshot_id} | {name} | {saved_at}"
+    return gr.update(value=choice), f"Selected saved state: {name} ({snapshot_id})"
 
 
 def _snapshot_data_from_inputs(
@@ -979,11 +997,11 @@ def save_current_state(
     index_rows.append({"id": snapshot_id, "name": payload["name"], "saved_at": now})
     _save_state_index(index_rows)
 
-    choices = _state_choices()
-    selected = next((c for c in choices if c.startswith(snapshot_id + " | ")), choices[0] if choices else None)
+    dropdown_update, table_rows, _ = _saved_state_updates(snapshot_id)
     return (
         f"State saved: {payload['name']} ({snapshot_id})",
-        gr.update(choices=choices, value=selected),
+        dropdown_update,
+        table_rows,
         payload["name"],
     )
 
@@ -991,22 +1009,22 @@ def save_current_state(
 def delete_selected_state(choice: str):
     snapshot_id = _state_id_from_choice(choice)
     if not snapshot_id:
-        return "Choose a saved state to delete.", gr.update(), gr.update()
+        return "Choose a saved state to delete.", gr.update(), _state_table_rows(), gr.update()
 
     snap_path = STATE_DIR / f"{snapshot_id}.json"
     if snap_path.exists():
         try:
             snap_path.unlink()
         except Exception as exc:
-            return f"Failed to delete state {snapshot_id}: {exc}", gr.update(), gr.update()
+            return f"Failed to delete state {snapshot_id}: {exc}", gr.update(), _state_table_rows(), gr.update()
 
     index_rows = [row for row in _load_state_index() if row.get("id") != snapshot_id]
     _save_state_index(index_rows)
-    choices = _state_choices()
-    value = choices[0] if choices else None
+    dropdown_update, table_rows, _ = _saved_state_updates()
     return (
         f"Deleted state: {snapshot_id}",
-        gr.update(choices=choices, value=value),
+        dropdown_update,
+        table_rows,
         "",
     )
 
@@ -1097,11 +1115,11 @@ def overwrite_selected_state(
     index_rows.append({"id": snapshot_id, "name": final_name, "saved_at": now})
     _save_state_index(index_rows)
 
-    choices = _state_choices()
-    selected = next((c for c in choices if c.startswith(snapshot_id + " | ")), choices[0] if choices else None)
+    dropdown_update, table_rows, _ = _saved_state_updates(snapshot_id)
     return (
         f"Overwrote state: {final_name} ({snapshot_id})",
-        gr.update(choices=choices, value=selected),
+        dropdown_update,
+        table_rows,
         final_name,
     )
 
@@ -1336,7 +1354,7 @@ def reset_layer_controls():
 
 def clear_all():
     _PREPARED_INPAINT_CACHE.clear()
-    choices = _state_choices()
+    dropdown_update, table_rows, _ = _saved_state_updates()
     return (
         None,
         None,
@@ -1355,7 +1373,8 @@ def clear_all():
         None,
         "Hide",
         "SVG code copy status.",
-        gr.update(choices=choices, value=(choices[0] if choices else None)),
+        dropdown_update,
+        table_rows,
         "",
     )
 
