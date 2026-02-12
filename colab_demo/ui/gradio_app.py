@@ -275,6 +275,13 @@ def _state_id_from_choice(choice: str) -> str:
     return choice.split(" | ", 1)[0].strip()
 
 
+def _resolve_state_id(choice: str, manual_state_id: str = "") -> str:
+    manual = (manual_state_id or "").strip()
+    if manual:
+        return manual
+    return _state_id_from_choice(choice)
+
+
 def _svg_to_temp_file(svg_text: str) -> Optional[str]:
     if not svg_text:
         return None
@@ -835,25 +842,6 @@ def refresh_saved_states():
     return dropdown_update, table_rows, f"Saved states list refreshed ({count} found in {STATE_DIR})."
 
 
-def select_saved_state_from_table(table_rows: Any, evt: Any):
-    if not isinstance(table_rows, list):
-        return gr.update(), "No saved state row selected."
-    idx = getattr(evt, "index", None)
-    row_index = idx[0] if isinstance(idx, (tuple, list)) else idx
-    if not isinstance(row_index, int) or row_index < 0 or row_index >= len(table_rows):
-        return gr.update(), "No saved state row selected."
-    row = table_rows[row_index]
-    if not isinstance(row, (tuple, list)) or len(row) < 3:
-        return gr.update(), "No saved state row selected."
-    snapshot_id = str(row[0] or "").strip()
-    name = str(row[1] or "state")
-    saved_at = str(row[2] or "")
-    if not snapshot_id:
-        return gr.update(), "No saved state row selected."
-    choice = f"{snapshot_id} | {name} | {saved_at}"
-    return gr.update(value=choice), f"Selected saved state: {name} ({snapshot_id})"
-
-
 def _snapshot_data_from_inputs(
     input_image: Image.Image,
     detect_preview_image: Image.Image,
@@ -1003,20 +991,21 @@ def save_current_state(
         dropdown_update,
         table_rows,
         payload["name"],
+        snapshot_id,
     )
 
 
-def delete_selected_state(choice: str):
-    snapshot_id = _state_id_from_choice(choice)
+def delete_selected_state(choice: str, manual_state_id: str):
+    snapshot_id = _resolve_state_id(choice, manual_state_id)
     if not snapshot_id:
-        return "Choose a saved state to delete.", gr.update(), _state_table_rows(), gr.update()
+        return "Choose a saved state to delete (or provide State ID).", gr.update(), _state_table_rows(), gr.update(), ""
 
     snap_path = STATE_DIR / f"{snapshot_id}.json"
     if snap_path.exists():
         try:
             snap_path.unlink()
         except Exception as exc:
-            return f"Failed to delete state {snapshot_id}: {exc}", gr.update(), _state_table_rows(), gr.update()
+            return f"Failed to delete state {snapshot_id}: {exc}", gr.update(), _state_table_rows(), gr.update(), snapshot_id
 
     index_rows = [row for row in _load_state_index() if row.get("id") != snapshot_id]
     _save_state_index(index_rows)
@@ -1026,11 +1015,13 @@ def delete_selected_state(choice: str):
         dropdown_update,
         table_rows,
         "",
+        "",
     )
 
 
 def overwrite_selected_state(
     choice: str,
+    manual_state_id: str,
     state_name: str,
     input_image: Image.Image,
     detect_preview_image: Image.Image,
@@ -1061,9 +1052,9 @@ def overwrite_selected_state(
     split_text_layers: bool,
     svg_code_mode: str,
 ):
-    snapshot_id = _state_id_from_choice(choice)
+    snapshot_id = _resolve_state_id(choice, manual_state_id)
     if not snapshot_id:
-        return "Choose a saved state to overwrite.", gr.update(), gr.update()
+        return "Choose a saved state to overwrite (or provide State ID).", gr.update(), _state_table_rows(), gr.update(), ""
 
     _ensure_state_store()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -1121,16 +1112,17 @@ def overwrite_selected_state(
         dropdown_update,
         table_rows,
         final_name,
+        snapshot_id,
     )
 
 
-def load_saved_state(choice: str):
-    snapshot_id = _state_id_from_choice(choice)
+def load_saved_state(choice: str, manual_state_id: str):
+    snapshot_id = _resolve_state_id(choice, manual_state_id)
     if not snapshot_id:
         return (
             None, None, [], [], manager_dropdown_update([]), None, None, None, "", [], "", "", None, "",
             "", "yolo26l", 0.3, 5, 10, 10, 200, 200, "manual object", "big-lama", "", "", True, "none",
-            "balanced", False, "Hide", "SVG code copy status.", "Choose a saved state first.",
+            "balanced", False, "Hide", "SVG code copy status.", "", "Choose a saved state first.",
         )
 
     path = STATE_DIR / f"{snapshot_id}.json"
@@ -1138,7 +1130,7 @@ def load_saved_state(choice: str):
         return (
             None, None, [], [], manager_dropdown_update([]), None, None, None, "", [], "", "", None, "",
             "", "yolo26l", 0.3, 5, 10, 10, 200, 200, "manual object", "big-lama", "", "", True, "none",
-            "balanced", False, "Hide", "SVG code copy status.", f"Saved state not found: {snapshot_id}",
+            "balanced", False, "Hide", "SVG code copy status.", snapshot_id, f"Saved state not found: {snapshot_id}",
         )
 
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1194,6 +1186,7 @@ def load_saved_state(choice: str):
         bool(controls.get("split_text_layers", False)),
         controls.get("svg_code_mode", "Hide"),
         "SVG code copy status.",
+        snapshot_id,
         f"Loaded state: {payload.get('name', snapshot_id)} ({snapshot_id})",
     )
 
