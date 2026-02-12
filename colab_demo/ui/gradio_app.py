@@ -1178,8 +1178,8 @@ def _render_svg_preview(trace_state: Dict[str, Any], selected_choices: List[str]
         + "</svg>"
     )
     return (
-        "<div style='border:1px solid #ccc; background:#fff; padding:8px;'>"
-        f"<div style='height:300px; overflow:hidden; border:1px solid #ddd;'>{preview_svg}</div>"
+        "<div style='border:1px solid #2a2f3a; background:#0f1218; padding:8px; border-radius:8px;'>"
+        f"<div style='height:300px; overflow:hidden; border:1px solid #2a2f3a; background:#151a22;'>{preview_svg}</div>"
         "</div>"
     )
 
