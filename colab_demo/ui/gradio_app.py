@@ -162,6 +162,24 @@ def _legacy_state_dirs() -> List[Path]:
     return out
 
 
+def _discover_state_files() -> List[Path]:
+    files: List[Path] = []
+    seen = set()
+    candidates = [STATE_DIR, *_legacy_state_dirs()]
+    for d in candidates:
+        if not d.exists() or not d.is_dir():
+            continue
+        for path in d.glob("*.json"):
+            if path.name == "states_index.json":
+                continue
+            key = str(path.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            files.append(path)
+    return files
+
+
 def _migrate_legacy_state_dirs() -> None:
     for legacy in _legacy_state_dirs():
         if not legacy.exists() or not legacy.is_dir():
@@ -216,9 +234,7 @@ def _rebuild_state_index_from_files() -> None:
                 "saved_at": str(row.get("saved_at") or ""),
             }
 
-    for path in STATE_DIR.glob("*.json"):
-        if path.name == "states_index.json":
-            continue
+    for path in _discover_state_files():
         row = _safe_state_row_from_file(path)
         if row is None:
             continue
@@ -792,7 +808,7 @@ def refresh_saved_states():
     _ensure_state_store()
     choices = _state_choices()
     value = choices[0] if choices else None
-    return gr.update(choices=choices, value=value), f"Saved states list refreshed ({len(choices)} found)."
+    return gr.update(choices=choices, value=value), f"Saved states list refreshed ({len(choices)} found in {STATE_DIR})."
 
 
 def _snapshot_data_from_inputs(
