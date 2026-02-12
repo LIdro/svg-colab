@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import html
 import io
 import json
 import os
@@ -1239,6 +1238,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
     selected_objects_state = gr.State([])
     processed_background_state = gr.State(None)
     prepared_inpaint_state = gr.State(None)
+    trace_preview_state = gr.State({"width": 0, "height": 0, "layers": []})
 
     with gr.Row():
         input_image = gr.Image(type="pil", label="Original", height=300)
@@ -1317,6 +1317,11 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
     with gr.Row():
         trace_button = gr.Button("Trace + Assemble SVG")
     svg_preview = gr.HTML(label="SVG Preview")
+    with gr.Row():
+        layer_visibility = gr.CheckboxGroup(label="Layer Visibility", choices=[], value=[])
+    with gr.Row():
+        show_all_layers_btn = gr.Button("Show all")
+        hide_all_layers_btn = gr.Button("Hide all")
     metadata = gr.Textbox(label="Metadata", interactive=False, lines=8)
     copy_svg_button = gr.Button("Copy SVG Code")
     copy_svg_status = gr.Textbox(label="Copy Status", interactive=False, value="SVG code copy status.")
@@ -1380,7 +1385,25 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
     trace_button.click(
         fn=trace_and_assemble,
         inputs=[input_image, processed_background_state, selected_objects_state, upscale_mode, upscale_quality, split_text_layers],
-        outputs=[svg_preview, svg_code, download_svg, metadata],
+        outputs=[svg_preview, svg_code, download_svg, metadata, layer_visibility, trace_preview_state],
+    )
+
+    layer_visibility.change(
+        fn=update_svg_preview_layers,
+        inputs=[layer_visibility, trace_preview_state],
+        outputs=[svg_preview],
+    )
+
+    show_all_layers_btn.click(
+        fn=show_all_layers,
+        inputs=[trace_preview_state],
+        outputs=[layer_visibility, svg_preview],
+    )
+
+    hide_all_layers_btn.click(
+        fn=hide_all_layers,
+        inputs=[trace_preview_state],
+        outputs=[layer_visibility, svg_preview],
     )
 
     svg_code_mode.change(
@@ -1522,6 +1545,9 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
         fn=toggle_svg_code_visibility,
         inputs=[svg_code_mode],
         outputs=[svg_code],
+    ).then(
+        fn=reset_layer_controls,
+        outputs=[layer_visibility, trace_preview_state, svg_preview],
     )
 
     clear_button.click(
@@ -1551,6 +1577,9 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
         fn=toggle_svg_code_visibility,
         inputs=[svg_code_mode],
         outputs=[svg_code],
+    ).then(
+        fn=reset_layer_controls,
+        outputs=[layer_visibility, trace_preview_state, svg_preview],
     )
 
 
