@@ -1442,6 +1442,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
 
     with gr.Row():
         state_name_input = gr.Textbox(label="State Name (optional)", placeholder="e.g. after detect text")
+        state_id_input = gr.Textbox(label="State ID (optional)", placeholder="paste id from Saved States Table")
         saved_states_dropdown = gr.Dropdown(choices=_state_choices(), label="Saved States")
         refresh_states_button = gr.Button("Refresh States")
         load_state_button = gr.Button("Load Selected State")
@@ -1602,7 +1603,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
             split_text_layers,
             svg_code_mode,
         ],
-        outputs=[status_text, saved_states_dropdown, saved_states_table, state_name_input],
+        outputs=[status_text, saved_states_dropdown, saved_states_table, state_name_input, state_id_input],
     )
 
     refresh_states_button.click(
@@ -1614,6 +1615,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
         fn=overwrite_selected_state,
         inputs=[
             saved_states_dropdown,
+            state_id_input,
             state_name_input,
             input_image,
             detect_preview_image,
@@ -1644,13 +1646,13 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
             split_text_layers,
             svg_code_mode,
         ],
-        outputs=[status_text, saved_states_dropdown, saved_states_table, state_name_input],
+        outputs=[status_text, saved_states_dropdown, saved_states_table, state_name_input, state_id_input],
     )
 
     delete_state_button.click(
         fn=delete_selected_state,
-        inputs=[saved_states_dropdown],
-        outputs=[status_text, saved_states_dropdown, saved_states_table, state_name_input],
+        inputs=[saved_states_dropdown, state_id_input],
+        outputs=[status_text, saved_states_dropdown, saved_states_table, state_name_input, state_id_input],
     )
 
     saved_states_table.select(
@@ -1661,7 +1663,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
 
     load_state_button.click(
         fn=load_saved_state,
-        inputs=[saved_states_dropdown],
+        inputs=[saved_states_dropdown, state_id_input],
         outputs=[
             input_image,
             detect_preview_image,
@@ -1695,6 +1697,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
             split_text_layers,
             svg_code_mode,
             copy_svg_status,
+            state_id_input,
             status_text,
         ],
     ).then(
@@ -1729,6 +1732,7 @@ with gr.Blocks(title="SVG Repair Colab Demo") as demo:
             saved_states_dropdown,
             saved_states_table,
             state_name_input,
+            state_id_input,
         ],
     ).then(
         fn=toggle_svg_code_visibility,
