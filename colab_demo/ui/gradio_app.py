@@ -5,6 +5,7 @@ import io
 import json
 import os
 import re
+import shutil
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -19,7 +20,8 @@ from PIL import Image, ImageDraw, ImageFilter
 API_BASE = os.getenv("COLAB_API_BASE", "http://127.0.0.1:5700")
 VISION_SOC_URL = os.getenv("VISION_SOC_URL", "http://127.0.0.1:5050")
 _PREPARED_INPAINT_CACHE: Dict[str, Dict[str, Any]] = {}
-STATE_DIR = Path(os.getenv("COLAB_STATE_DIR", ".dev_state"))
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+STATE_DIR = Path(os.getenv("COLAB_STATE_DIR", str(PROJECT_ROOT / ".dev_state"))).expanduser().resolve()
 STATE_INDEX = STATE_DIR / "states_index.json"
 
 try:
@@ -111,6 +113,8 @@ def _ensure_state_store() -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     if not STATE_INDEX.exists():
         STATE_INDEX.write_text("[]", encoding="utf-8")
+    _migrate_legacy_state_dirs()
+    _rebuild_state_index_from_files()
 
 
 def _load_state_index() -> List[Dict[str, Any]]:
@@ -136,6 +140,87 @@ def _state_choices() -> List[str]:
         ts = row.get("saved_at", "")
         choices.append(f"{sid} | {name} | {ts}")
     return choices
+
+
+def _legacy_state_dirs() -> List[Path]:
+    candidates = [
+        Path.cwd() / ".dev_state",
+        PROJECT_ROOT / "colab_demo" / ".dev_state",
+        PROJECT_ROOT / "colab_demo" / "colab_demo" / ".dev_state",
+    ]
+    out: List[Path] = []
+    seen = set()
+    for p in candidates:
+        resolved = p.expanduser().resolve()
+        if resolved == STATE_DIR:
+            continue
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(resolved)
+    return out
+
+
+def _migrate_legacy_state_dirs() -> None:
+    for legacy in _legacy_state_dirs():
+        if not legacy.exists() or not legacy.is_dir():
+            continue
+        for path in legacy.glob("*.json"):
+            if path.name == "states_index.json":
+                continue
+            target = STATE_DIR / path.name
+            if target.exists():
+                continue
+            try:
+                shutil.copy2(path, target)
+            except Exception:
+                continue
+
+
+def _safe_state_row_from_file(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    sid = str(payload.get("id") or path.stem)
+    name = str(payload.get("name") or f"state-{sid}")
+    saved_at = str(payload.get("saved_at") or "")
+    if not saved_at:
+        try:
+            saved_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        except Exception:
+            saved_at = ""
+    return {"id": sid, "name": name, "saved_at": saved_at}
+
+
+def _rebuild_state_index_from_files() -> None:
+    rows_by_id: Dict[str, Dict[str, Any]] = {}
+
+    for row in _load_state_index():
+        if not isinstance(row, dict):
+            continue
+        sid = str(row.get("id") or "").strip()
+        if not sid:
+            continue
+        rows_by_id[sid] = {
+            "id": sid,
+            "name": str(row.get("name") or f"state-{sid}"),
+            "saved_at": str(row.get("saved_at") or ""),
+        }
+
+    for path in STATE_DIR.glob("*.json"):
+        if path.name == "states_index.json":
+            continue
+        row = _safe_state_row_from_file(path)
+        if row is None:
+            continue
+        rows_by_id[row["id"]] = row
+
+    rows = sorted(rows_by_id.values(), key=lambda r: r.get("saved_at", ""), reverse=True)
+    STATE_INDEX.write_text(json.dumps(rows, indent=2), encoding="utf-8")
 
 
 def _state_id_from_choice(choice: str) -> str:
