@@ -17,6 +17,8 @@ import numpy as np
 import requests
 from PIL import Image, ImageDraw, ImageFilter
 
+from colab_demo.services.semantic_labels import assign_text_component_labels, semanticize_non_text_objects
+
 API_BASE = os.getenv("COLAB_API_BASE", "http://127.0.0.1:5700")
 VISION_SOC_URL = os.getenv("VISION_SOC_URL", "http://127.0.0.1:5050")
 _PREPARED_INPAINT_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -599,6 +601,7 @@ def _split_text_object_layers(
                 "label": f"{obj.get('label', 'text')}_{len(components) + 1}",
                 "bbox_xyxy": [left, top, left + comp_w, top + comp_h],
                 "mask_data": comp_mask,
+                "area": area,
             }
         )
 
@@ -606,6 +609,10 @@ def _split_text_object_layers(
         return [obj]
 
     components.sort(key=lambda item: item["bbox_xyxy"][0])
+    labels = assign_text_component_labels(obj.get("label", "text"), components)
+    for idx, component in enumerate(components):
+        component["label"] = labels[idx]
+        component["semantic_kind"] = "text_component"
     return components
 
 
@@ -615,11 +622,11 @@ def _expand_objects_for_trace(
     split_text_layers: bool,
 ) -> List[Dict[str, Any]]:
     if not split_text_layers:
-        return selected_objects
+        return semanticize_non_text_objects(selected_objects, image_size)
     expanded: List[Dict[str, Any]] = []
     for obj in selected_objects:
         expanded.extend(_split_text_object_layers(obj, image_size))
-    return expanded
+    return semanticize_non_text_objects(expanded, image_size)
 
 
 def _upscale_data_uri(image_data: str, mode: str) -> str:
