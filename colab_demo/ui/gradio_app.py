@@ -621,9 +621,15 @@ def _expand_objects_for_trace(
     image_size: tuple[int, int],
     split_text_layers: bool,
 ) -> List[Dict[str, Any]]:
-    if not split_text_layers:
-        return semanticize_non_text_objects(selected_objects, image_size)
     expanded: List[Dict[str, Any]] = []
+    if not split_text_layers:
+        for obj in selected_objects:
+            if _is_text_like_label(obj.get("label", "")):
+                expanded.extend(_split_text_object_layers(obj, image_size))
+            else:
+                expanded.append(obj)
+        return semanticize_non_text_objects(expanded, image_size)
+
     for obj in selected_objects:
         expanded.extend(_split_text_object_layers(obj, image_size))
     return semanticize_non_text_objects(expanded, image_size)
